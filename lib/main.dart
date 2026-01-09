@@ -1,24 +1,32 @@
 import 'package:flutter/material.dart';
-import 'modules/auth/login_screen.dart'; // Import the login screen
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart'; // This file was just created by the CLI
+import 'modules/auth/login_screen.dart'; 
 
-void main() {
-  runApp(const SmartAmbulanceApp());
+// We change main() to 'Future<void>' so it can wait for Firebase
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized(); // Required for async main
+  
+  // This connects to Google's servers
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  runApp(const MyApp());
 }
 
-class SmartAmbulanceApp extends StatelessWidget {
-  const SmartAmbulanceApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Smart Ambulance Driver',
+      title: 'Smart Ambulance',
       theme: ThemeData(
-        // Using Red as the primary color for emergency context
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
+        primarySwatch: Colors.red,
         useMaterial3: true,
       ),
-      // Define the first screen the user sees
       home: const LoginScreen(),
     );
   }

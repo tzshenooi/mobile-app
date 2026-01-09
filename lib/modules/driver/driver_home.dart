@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart'; // 👈 The new Database
+import 'package:firebase_auth/firebase_auth.dart';
 import '../auth/login_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
@@ -11,144 +11,92 @@ class DriverHomeScreen extends StatefulWidget {
 }
 
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
-  List<dynamic> jobs = [];
-  bool isLoading = true;
-  
-  // REPLACE WITH YOUR PC IP
-  final String baseUrl = "http://10.0.2.2:5000"; 
-
-  @override
-  void initState() {
-    super.initState();
-    fetchJobs();
-  }
-
-  Future<void> fetchJobs() async {
-    try {
-      // Fetch jobs assigned to Driver 1
-      final response = await http.get(Uri.parse("$baseUrl/driver_bookings/1"));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        setState(() {
-          jobs = data['data'];
-          isLoading = false;
-        });
-      }
-    } catch (e) {
-      print("Error fetching jobs: $e");
-    }
-  }
-
-  Future<void> updateStatus(int bookingId, String newStatus) async {
-    try {
-      final response = await http.post(
-        Uri.parse("$baseUrl/update_status"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "booking_id": bookingId,
-          "status": newStatus
-        }),
+  // 👇 LOGOUT FUNCTION
+  void logout() async {
+    await FirebaseAuth.instance.signOut();
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
       );
-
-      if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Status updated to: $newStatus")),
-        );
-        fetchJobs(); // Refresh list to show new button state
-      }
-    } catch (e) {
-      print("Error updating status: $e");
     }
+  }
+
+  // 👇 ACCEPT JOB FUNCTION (Updates Firebase directly)
+  void acceptJob(String jobId) {
+    FirebaseFirestore.instance.collection('bookings').doc(jobId).update({
+      'status': 'Accepted',
+      'driver_id': FirebaseAuth.instance.currentUser?.email, // Assign to me
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Job Accepted! Head to location.")),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("My Tasks"),
-        backgroundColor: Colors.red,
+        title: const Text("Available Jobs"),
+        backgroundColor: Colors.redAccent,
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: fetchJobs),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () {
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
-            },
-          ),
+          IconButton(onPressed: logout, icon: const Icon(Icons.logout)),
         ],
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : jobs.isEmpty
-              ? const Center(child: Text("No active jobs assigned."))
-              : ListView.builder(
-                  itemCount: jobs.length,
-                  itemBuilder: (context, index) {
-                    final job = jobs[index];
-                    String status = job['status'];
-                    
-                    // Determine Button Logic based on current status
-                    String buttonText = "START NAVIGATION";
-                    Color buttonColor = Colors.green;
-                    String nextStatus = "En Route";
+      // 👇 REAL-TIME LISTENER
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('bookings')
+            .where('status', isEqualTo: 'Pending') // Only show new jobs
+            .snapshots(),
+        builder: (context, snapshot) {
+          // 1. Loading State
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-                    if (status == "En Route") {
-                      buttonText = "COMPLETE JOB";
-                      buttonColor = Colors.orange;
-                      nextStatus = "Completed";
-                    } else if (status == "Completed") {
-                      return const SizedBox.shrink(); // Hide completed jobs from list
-                    }
+          // 2. Error State
+          if (snapshot.hasError) {
+            return Center(child: Text("Error: ${snapshot.error}"));
+          }
 
-                    return Card(
-                      margin: const EdgeInsets.all(10),
-                      elevation: 4,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text("EMERGENCY: ${job['emergency_type']}", 
-                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: status == "En Route" ? Colors.orange[100] : Colors.blue[100],
-                                    borderRadius: BorderRadius.circular(4)
-                                  ),
-                                  child: Text(status, style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
-                                )
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Text("Patient: ${job['patient_name']}", style: const TextStyle(fontSize: 16)),
-                            Text("Location: ${job['location']}", style: const TextStyle(fontSize: 16)),
-                            const SizedBox(height: 15),
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton.icon(
-                                icon: Icon(status == "En Route" ? Icons.check_circle : Icons.navigation),
-                                label: Text(buttonText),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: buttonColor,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                ),
-                                onPressed: () {
-                                  updateStatus(job['id'], nextStatus);
-                                },
-                              ),
-                            )
-                          ],
-                        ),
-                      ),
-                    );
-                  },
+          // 3. No Jobs State
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(
+              child: Text(
+                "No pending jobs right now.",
+                style: TextStyle(fontSize: 18, color: Colors.grey),
+              ),
+            );
+          }
+
+          // 4. Show the List
+          var jobs = snapshot.data!.docs;
+
+          return ListView.builder(
+            itemCount: jobs.length,
+            itemBuilder: (context, index) {
+              var job = jobs[index];
+              var data = job.data() as Map<String, dynamic>;
+
+              return Card(
+                margin: const EdgeInsets.all(10),
+                child: ListTile(
+                  leading: const Icon(Icons.medical_services, color: Colors.red),
+                  title: Text(data['patient_name'] ?? 'Unknown Patient'),
+                  subtitle: Text("Location: ${data['location'] ?? 'No Location'}"),
+                  trailing: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    onPressed: () => acceptJob(job.id),
+                    child: const Text("ACCEPT", style: TextStyle(color: Colors.white)),
+                  ),
                 ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
