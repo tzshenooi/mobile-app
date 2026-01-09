@@ -87,4 +87,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'smart-ambulance-6df31.firebasestorage.app',
     measurementId: 'G-4DCBCTLVD3',
   );
+
 }

@@ -3,7 +3,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart'; // This file was just created by the CLI
 import 'modules/auth/login_screen.dart'; 
 
-// We change main() to 'Future<void>' so it can wait for Firebase
 void main() async {
   WidgetsFlutterBinding.ensureInitialized(); // Required for async main
   
@@ -27,7 +26,7 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.red,
         useMaterial3: true,
       ),
-      home: const LoginScreen(),
+      home: const LoginScreen(), // We will fix this screen next!
     );
   }
 }
