@@ -1,79 +1,65 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // 👈 The new Engine
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../main.dart'; // To access the 'supabase' variable
 import '../driver/driver_home.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
-
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController emailController = TextEditingController();
-  final TextEditingController passwordController = TextEditingController();
-  bool isLoading = false;
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
 
-  // 👇 NEW FIREBASE LOGIN FUNCTION
-  Future<void> loginUser() async {
-    setState(() => isLoading = true);
-
+  Future<void> _login() async {
+    setState(() => _isLoading = true);
     try {
-      // 1. Talk directly to Google/Firebase
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: emailController.text.trim(),
-        password: passwordController.text.trim(),
+      // 👇 SUPABASE LOGIN
+      await supabase.auth.signInWithPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
       );
 
-      // 2. If successful, go to Home
       if (mounted) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const DriverHomeScreen()),
         );
       }
-    } on FirebaseAuthException catch (e) {
-      // 3. Handle Errors (Wrong password, etc.)
-      String message = "Login failed";
-      if (e.code == 'user-not-found') message = "No user found for that email.";
-      if (e.code == 'wrong-password') message = "Wrong password provided.";
-      
+    } on AuthException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message), backgroundColor: Colors.red),
+          SnackBar(content: Text(error.message), backgroundColor: Colors.red),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Login Error"), backgroundColor: Colors.red),
         );
       }
     } finally {
-      if (mounted) setState(() => isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Ambulance Login")),
+      appBar: AppBar(title: const Text("Supabase Login")),
       body: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(16),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            TextField(
-              controller: emailController,
-              decoration: const InputDecoration(labelText: "Email"),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: passwordController,
-              decoration: const InputDecoration(labelText: "Password"),
-              obscureText: true,
-            ),
+            TextField(controller: _emailController, decoration: const InputDecoration(labelText: 'Email')),
+            TextField(controller: _passwordController, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
             const SizedBox(height: 20),
-            isLoading
-                ? const CircularProgressIndicator()
-                : ElevatedButton(
-                    onPressed: loginUser,
-                    child: const Text("Login"),
-                  ),
+            _isLoading 
+              ? const CircularProgressIndicator()
+              : ElevatedButton(onPressed: _login, child: const Text("Login")),
           ],
         ),
       ),
