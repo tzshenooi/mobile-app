@@ -26,7 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const DriverHomeScreen()),
+          MaterialPageRoute(builder: (context) => const DriverHome()),
         );
       }
     } on AuthException catch (error) {
