@@ -147,21 +147,39 @@ class _DriverHomeState extends State<DriverHome> {
     }
   }
 
+  // void _listenForNewJobs() {
+  //   supabase
+  //       .channel('public:bookings')
+  //       .onPostgresChanges(
+  //         event: PostgresChangeEvent.insert,
+  //         schema: 'public',
+  //         table: 'bookings',
+  //         callback: (payload) {
+  //           if (payload.newRecord['suggested_driver'] == 'hiarc') {
+  //             _showJobPopup(payload.newRecord);
+  //           }
+  //         },
+  //       )
+  //       .subscribe();
+  // }
+
   void _listenForNewJobs() {
-    supabase
-        .channel('public:bookings')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'bookings',
-          callback: (payload) {
-            if (payload.newRecord['suggested_driver'] == 'hiarc') {
-              _showJobPopup(payload.newRecord);
-            }
-          },
-        )
-        .subscribe();
-  }
+  final myId = supabase.auth.currentUser?.id; // Get the logged-in ID
+  supabase
+      .channel('public:bookings')
+      .onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'bookings',
+        callback: (payload) {
+          // Listen for bookings specifically assigned to THIS driver's ID
+          if (payload.newRecord['driver_id'] == myId) {
+            _showJobPopup(payload.newRecord);
+          }
+        },
+      )
+      .subscribe();
+}
 
   Future<void> _completeJob() async {
     if (_activeBookingId == null) return;
@@ -187,40 +205,61 @@ class _DriverHomeState extends State<DriverHome> {
   }
 
   void _showJobPopup(Map<String, dynamic> booking) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.warning, color: Colors.red),
-            SizedBox(width: 10),
-            Text("EMERGENCY ALERT"),
-          ],
-        ),
-        content: Text("New SOS received at:\n${booking['location']}"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context), 
-            child: const Text("IGNORE", style: TextStyle(color: Colors.grey))
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              setState(() {
-                _activeBookingId = booking['id'].toString();
-              });
-              Navigator.pop(context);
-              _launchMaps(booking['latitude'], booking['longitude']);
-            },
-            child: const Text("NAVIGATE", style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
+  // Check if the driver is currently on a mission
+  bool isBusy = _activeBookingId != null;
 
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => AlertDialog(
+      title: const Text("EMERGENCY ALERT"),
+      content: Text(isBusy 
+        ? "New SOS received, but you are currently BUSY with another patient." 
+        : "New SOS received at:\n${booking['location']}"),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context), 
+          child: const Text("IGNORE")
+        ),
+        // 🟢 DISABLE button if the driver is busy
+        // Inside _showJobPopup in driver_home.dart
+ElevatedButton(
+  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+  onPressed: () async {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
+
+    try {
+      // 1. Update mission status to 'Accepted'
+      await supabase
+          .from('bookings')
+          .update({'status': 'Accepted'})
+          .eq('id', booking['id']);
+
+      // 2. Update driver status to 'Busy'
+      await supabase
+          .from('drivers')
+          .update({'status': 'Busy'})
+          .eq('id', userId);
+
+      setState(() {
+        _activeBookingId = booking['id'].toString();
+      });
+
+      if (mounted) Navigator.pop(context);
+      
+      // 3. Start Navigation
+      _launchMaps(booking['latitude'], booking['longitude']);
+    } catch (e) {
+      debugPrint("❌ Error during acceptance: $e");
+    }
+  },
+  child: const Text("ACCEPT & NAVIGATE", style: TextStyle(color: Colors.white)),
+),
+      ],
+    ),
+  );
+}
   Future<void> _launchMaps(dynamic lat, dynamic lng) async {
     final url = Uri.parse("google.navigation:q=$lat,$lng&mode=d");
     if (await canLaunchUrl(url)) {
