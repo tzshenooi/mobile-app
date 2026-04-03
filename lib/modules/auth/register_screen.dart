@@ -20,6 +20,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _pageController = PageController();
   int _currentStep = 1;
   bool _isLoading = false;
+  bool _isScanningMyKad = false;
   final ImagePicker _picker = ImagePicker();
 
   // Document Files
@@ -52,7 +53,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _pickImage(String type, ImageSource source) async {
     final XFile? selected = await _picker.pickImage(
       source: source,
-      imageQuality: 50,
+      imageQuality: 35,
+      maxWidth: 1400,
     );
     if (selected != null) {
       setState(() {
@@ -126,6 +128,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
  Future<void> _scanMyKadFromFile(File file) async {
+    if (mounted) setState(() => _isScanningMyKad = true);
     try {
       final request = http.MultipartRequest('POST', Uri.parse(_myKadExtractUrl));
       final ext = _safeUploadExtension(file.path);
@@ -170,6 +173,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _showSnackBar('MyKad scan timed out. Is the server running?');
     } catch (e) {
       _showSnackBar('MyKad scan error: $e');
+    } finally {
+      if (mounted) setState(() => _isScanningMyKad = false);
     }
   }
 
@@ -289,6 +294,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const SizedBox(height: 20),
             
             _docTile("Upload IC Front View", _icFile, () => _showPickerOptions('ic')),
+            if (_isScanningMyKad) ...[
+              const SizedBox(height: 8),
+              const LinearProgressIndicator(minHeight: 3),
+              const SizedBox(height: 8),
+            ],
             const SizedBox(height: 10),
             const Divider(),
             const SizedBox(height: 10),
