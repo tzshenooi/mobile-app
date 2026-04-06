@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../driver/driver_home.dart';// Adjust based on your actual folder name
-import 'register_screen.dart';// Adjust based on your actual folder name
-
+import 'register_screen.dart'; // Make sure this path is correct
+import '../driver/driver_home.dart'; // Make sure this path is correct
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -16,176 +15,84 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
 
-  // 🎨 UI Constants
-  final Color primaryBlue = const Color(0xFF2563EB);
-  final Color darkBlue = const Color(0xFF1E40AF);
+  final Color primaryBlue = const Color(0xFF1E40AF);
   final Color bgGray = const Color(0xFFF8FAFC);
 
-  Future<void> _handleSignIn() async {
+  Future<void> _handleLogin() async {
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+      _showSnackBar("Please enter both email and password.");
+      return;
+    }
+
     setState(() => _isLoading = true);
     try {
-      await Supabase.instance.client.auth.signInWithPassword(
+      final response = await Supabase.instance.client.auth.signInWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-      if (mounted) {
+
+      if (response.user != null && mounted) {
+        // Navigate to Driver Home on success
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const DriverHome()),
         );
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Login Failed: ${e.toString()}"), backgroundColor: Colors.red),
-        );
-      }
+      if (mounted) _showSnackBar("Login Failed: ${e.toString()}");
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red[800], behavior: SnackBarBehavior.floating),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bgGray,
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [primaryBlue.withOpacity(0.05), bgGray],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
+      body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 30),
+          padding: const EdgeInsets.symmetric(horizontal: 25),
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const SizedBox(height: 100),
-              
-              // 🛡️ Logo Section
+              _buildLogo(),
+              const SizedBox(height: 30),
               Container(
-                width: 85,
-                height: 85,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [primaryBlue, darkBlue]),
-                  borderRadius: BorderRadius.circular(25),
-                  boxShadow: [
-                    BoxShadow(color: primaryBlue.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10))
-                  ],
-                ),
-                child: const Icon(Icons.shield_rounded, color: Colors.white, size: 45),
-              ),
-              const SizedBox(height: 25),
-              
-              // 📝 Title
-              const Text(
-                "Emergency Services",
-                style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
-              ),
-              const Text(
-                "Ambulance Driver Portal",
-                style: TextStyle(fontSize: 16, color: Color(0xFF64748B), fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 50),
-
-              // 💳 Login Card (PAYPEL Style)
-              Container(
-                padding: const EdgeInsets.all(30),
+                padding: const EdgeInsets.all(25),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(30),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 25, offset: const Offset(0, 10))
-                  ],
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 15)],
                 ),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("Email Address", style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF475569))),
+                    const Text("Driver Login", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22)),
                     const SizedBox(height: 10),
-                    _buildTextField(
-                      controller: _emailController,
-                      hint: "driver@emergency.com",
-                      icon: Icons.mail_outline,
-                    ),
+                    const Text("Smart Ambulance Dispatch", style: TextStyle(color: Colors.grey, fontSize: 14)),
                     const SizedBox(height: 25),
-                    const Text("Password", style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF475569))),
-                    const SizedBox(height: 10),
-                    _buildTextField(
-                      controller: _passwordController,
-                      hint: "••••••••",
-                      icon: Icons.lock_outline,
-                      isPassword: true,
-                    ),
-                    const SizedBox(height: 15),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () {},
-                        child: Text("Forgot Password?", style: TextStyle(color: primaryBlue, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
+                    _buildInputField(_emailController, "Email Address", Icons.mail_outline),
+                    _buildInputField(_passwordController, "Password", Icons.lock_outline, isPass: true),
+                    const SizedBox(height: 25),
+                    _buildActionButton("Sign In", _handleLogin, isLoading: _isLoading),
                     const SizedBox(height: 20),
-                    
-                    // 🚀 Sign In Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 60,
-                      child: ElevatedButton(
-                        onPressed: _isLoading ? null : _handleSignIn,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          shadowColor: Colors.transparent,
-                          padding: EdgeInsets.zero,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-                        ),
-                        child: Ink(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [primaryBlue, darkBlue]),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Container(
-                            alignment: Alignment.center,
-                            child: _isLoading 
-                              ? const CircularProgressIndicator(color: Colors.white)
-                              : const Text("Sign In", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                          ),
-                        ),
-                      ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => const RegisterScreen()),
+                        );
+                      },
+                      child: Text("Don't have an account? Register here", style: TextStyle(color: primaryBlue)),
                     ),
-                    // 🟢 Add this after the Sign In Button
-const SizedBox(height: 25),
-Row(
-  mainAxisAlignment: MainAxisAlignment.center,
-  children: [
-    const Text("Don't have an account? ", style: TextStyle(color: Color(0xFF64748B))),
-    GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => const RegisterScreen()),
-        );
-      },
-      child: Text(
-        "Register",
-        style: TextStyle(color: primaryBlue, fontWeight: FontWeight.bold),
-      ),
-    ),
-  ],
-),
                   ],
                 ),
               ),
-              
-              const SizedBox(height: 40),
-              const Text(
-                "Need help? Contact support",
-                style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -193,31 +100,42 @@ Row(
     );
   }
 
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String hint,
-    required IconData icon,
-    bool isPassword = false,
-  }) {
-    return TextField(
-      controller: controller,
-      obscureText: isPassword,
+  // --- 🎨 UI HELPERS ---
+
+  Widget _buildLogo() => Container(
+    width: 80, height: 80,
+    decoration: BoxDecoration(
+      gradient: LinearGradient(colors: [primaryBlue, const Color(0xFF1E3A8A)]),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: const Icon(Icons.shield, color: Colors.white, size: 40),
+  );
+
+  Widget _buildInputField(TextEditingController ctrl, String hint, IconData icon, {bool isPass = false}) => Padding(
+    padding: const EdgeInsets.only(bottom: 15),
+    child: TextField(
+      controller: ctrl,
+      obscureText: isPass,
       decoration: InputDecoration(
-        prefixIcon: Icon(icon, color: Colors.grey[400], size: 22),
+        prefixIcon: Icon(icon, size: 18),
         hintText: hint,
-        hintStyle: TextStyle(color: Colors.grey[300]),
         filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(vertical: 18),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide(color: Colors.grey[200]!, width: 2),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide(color: primaryBlue, width: 2),
-        ),
+        fillColor: bgGray,
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: const BorderSide(color: Colors.transparent)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide(color: primaryBlue)),
       ),
-    );
-  }
+    ),
+  );
+
+  Widget _buildActionButton(String text, VoidCallback onPressed, {bool isLoading = false}) => SizedBox(
+    width: double.infinity,
+    height: 55,
+    child: ElevatedButton(
+      onPressed: isLoading ? null : onPressed,
+      style: ElevatedButton.styleFrom(backgroundColor: primaryBlue, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+      child: isLoading 
+        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
+        : Text(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+    ),
+  );
 }

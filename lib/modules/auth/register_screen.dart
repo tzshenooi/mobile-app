@@ -7,7 +7,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:async';
 
-
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
 
@@ -24,10 +23,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final ImagePicker _picker = ImagePicker();
 
   // Document Files
-  File? _avatarFile;
   File? _icFile;
   File? _licenseFile;
-  File? _certFile;
 
   // Step 1 Controllers
   final _nameController = TextEditingController();
@@ -36,32 +33,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
-  // Step 2 Controllers
-  final _licenseNoController = TextEditingController();
-  final _emergencyNameController = TextEditingController();
-  final _emergencyPhoneController = TextEditingController();
-  String _selectedCert = 'EMT-B';
-
   final Color primaryBlue = const Color(0xFF1E40AF);
   final Color bgGray = const Color(0xFFF8FAFC);
+  
+  // Updated for USM Network / Physical Device
   static const String _myKadExtractUrl = String.fromEnvironment(
     'MYKAD_EXTRACT_URL',
-    defaultValue: 'http://10.0.2.2:8001/extract',
+    defaultValue: 'http://10.207.154.87:8001/extract',
   );
+
+  /// Supabase Storage bucket — must exist in Dashboard → Storage.
+  /// If you see "Bucket not found", create a bucket with this exact id or change the value below.
+  static const String _storageBucket = 'documents';
 
   // --- 📸 CAMERA & PICKER LOGIC ---
   Future<void> _pickImage(String type, ImageSource source) async {
     final XFile? selected = await _picker.pickImage(
       source: source,
-      imageQuality: 35,
+      imageQuality: type == 'ic' ? 70 : 35, // Higher quality for OCR
       maxWidth: 1400,
     );
     if (selected != null) {
       setState(() {
-        if (type == 'avatar') _avatarFile = File(selected.path);
         if (type == 'ic') _icFile = File(selected.path);
         if (type == 'license') _licenseFile = File(selected.path);
-        if (type == 'cert') _certFile = File(selected.path);
       });
       if (type == 'ic') {
         await _scanMyKadFromFile(File(selected.path));
@@ -100,21 +95,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-    // static const String _myKadExtractUrl = 'http://10.0.2.2:8001/extract';
-
-
- MediaType _mimeFromExtension(String ext) {
+  // --- 🌐 NETWORK HELPERS ---
+  MediaType _mimeFromExtension(String ext) {
     switch (ext) {
-      case '.png':
-        return MediaType('image', 'png');
-      case '.webp':
-        return MediaType('image', 'webp');
-      case '.heic':
-        return MediaType('image', 'heic');
-      case '.heif':
-        return MediaType('image', 'heif');
-      default:
-        return MediaType('image', 'jpeg');
+      case '.png': return MediaType('image', 'png');
+      case '.webp': return MediaType('image', 'webp');
+      default: return MediaType('image', 'jpeg');
     }
   }
 
@@ -122,12 +108,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final lower = path.toLowerCase();
     if (lower.endsWith('.png')) return '.png';
     if (lower.endsWith('.webp')) return '.webp';
-    if (lower.endsWith('.heic')) return '.heic';
-    if (lower.endsWith('.heif')) return '.heif';
     return '.jpg';
   }
 
- Future<void> _scanMyKadFromFile(File file) async {
+  Future<void> _scanMyKadFromFile(File file) async {
     if (mounted) setState(() => _isScanningMyKad = true);
     try {
       final request = http.MultipartRequest('POST', Uri.parse(_myKadExtractUrl));
@@ -141,36 +125,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
           contentType: _mimeFromExtension(ext),
         ),
       );
-      final streamed = await request.send().timeout(
-        const Duration(seconds: 120),
-        onTimeout: () => throw TimeoutException('MyKad server did not respond in time'),
-      );
+      final streamed = await request.send().timeout(const Duration(seconds: 120));
       final response = await http.Response.fromStream(streamed);
-      if (response.statusCode != 200) {
-        _showSnackBar(
-          'MyKad scan failed (${response.statusCode}): ${response.body}',
-        );
-        return;
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        setState(() {
+          _icController.text = (data['ic_number'] ?? '').toString().trim();
+          _nameController.text = (data['name'] ?? '').toString().trim();
+        });
+        _showSnackBar('IC and name autofilled from MyKad scan.');
       }
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final scannedIc = (data['ic_number'] ?? '').toString().trim();
-      final scannedName = (data['name'] ?? '').toString().trim();
-      setState(() {
-        if (scannedIc.isNotEmpty) _icController.text = scannedIc;
-        if (scannedName.isNotEmpty) _nameController.text = scannedName;
-      });
-      _showSnackBar(
-        scannedIc.isEmpty && scannedName.isEmpty
-            ? 'Scan completed, but no IC/name detected.'
-            : 'IC and name autofilled from MyKad scan.',
-      );
-    } on SocketException {
-      _showSnackBar(
-        'Cannot reach MyKad server at $_myKadExtractUrl. '
-        'Check server is running and URL/port match.',
-      );
-    } on TimeoutException {
-      _showSnackBar('MyKad scan timed out. Is the server running?');
     } catch (e) {
       _showSnackBar('MyKad scan error: $e');
     } finally {
@@ -187,8 +152,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
       _pageController.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
     } else {
-      if (_licenseFile == null || _certFile == null || _licenseNoController.text.isEmpty) {
-        _showSnackBar("Please upload your License and Medical Cert.");
+      if (_licenseFile == null) {
+        _showSnackBar("Please upload your Driving License.");
         return;
       }
       _handleCompleteRegistration();
@@ -212,29 +177,45 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       if (res.user != null) {
         final userId = res.user!.id;
+        final icFile = _icFile;
+        final licenseFile = _licenseFile;
+        if (icFile == null || licenseFile == null) {
+          if (mounted) _showSnackBar('Missing IC or license file. Please re-select your documents.');
+          return;
+        }
 
-        Future<String?> uploadToStorage(File? file, String bucket, String folder) async {
-          if (file == null) return null;
-          final String fileName = '$folder/$userId/${DateTime.now().millisecondsSinceEpoch}.jpg';
-          await Supabase.instance.client.storage.from(bucket).upload(fileName, file);
+        /// Uses [uploadBinary] so gallery picks on Android/iOS read reliably (not only [File] paths).
+        Future<String> uploadDocToStorage(File file, String bucket, String folder) async {
+          final bytes = await file.readAsBytes();
+          if (bytes.isEmpty) throw Exception('Selected image is empty.');
+          final ext = _safeUploadExtension(file.path);
+          final fileName = '$folder/$userId/${DateTime.now().microsecondsSinceEpoch}$ext';
+          final contentType = ext == '.png'
+              ? 'image/png'
+              : ext == '.webp'
+                  ? 'image/webp'
+                  : 'image/jpeg';
+          await Supabase.instance.client.storage.from(bucket).uploadBinary(
+                fileName,
+                bytes,
+                fileOptions: FileOptions(contentType: contentType, upsert: true),
+              );
           return Supabase.instance.client.storage.from(bucket).getPublicUrl(fileName);
         }
 
-        final icUrl = await uploadToStorage(_icFile, 'documents', 'ic_verify');
-        final licenseUrl = await uploadToStorage(_licenseFile, 'documents', 'licenses');
-        final certUrl = await uploadToStorage(_certFile, 'documents', 'certs');
+        final icUrl = await uploadDocToStorage(icFile, _storageBucket, 'ic_verify');
+        final licenseUrl = await uploadDocToStorage(licenseFile, _storageBucket, 'licenses');
 
+        // No certification_level here — do not rely on DB default (e.g. EMT-B).
         await Supabase.instance.client.from('drivers').insert({
           'id': userId,
           'name': _nameController.text.trim(),
           'ic_number': _icController.text.trim(),
           'phone_number': _phoneController.text.trim(),
-          'license_no': _licenseNoController.text.trim(),
-          'certification_level': _selectedCert,
           'ic_front_url': icUrl,
           'license_front_url': licenseUrl,
-          'cert_proof_url': certUrl,
-          'status': 'Offline',
+          'status': 'Pending',
+          // 'certification_level': null,
         });
 
         if (mounted) {
@@ -292,7 +273,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           children: [
             const Text("Account & Identity", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             const SizedBox(height: 20),
-            
             _docTile("Upload IC Front View", _icFile, () => _showPickerOptions('ic')),
             if (_isScanningMyKad) ...[
               const SizedBox(height: 8),
@@ -302,7 +282,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const SizedBox(height: 10),
             const Divider(),
             const SizedBox(height: 10),
-
             _buildInputField(_nameController, "Full Name (from IC)", Icons.person_outline),
             const SizedBox(height: 12),
             _buildInputField(_icController, "IC Number", Icons.badge_outlined),
@@ -331,12 +310,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           children: [
             const Text("Professional Verification", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             const SizedBox(height: 20),
+            // Only License Upload Tile remains
             _docTile("Driving License", _licenseFile, () => _showPickerOptions('license')),
-            _docTile("Medical Cert", _certFile, () => _showPickerOptions('cert')),
-            const Divider(height: 30),
-            _buildInputField(_licenseNoController, "License Number", Icons.drive_eta_outlined),
-            const SizedBox(height: 15),
-            _dropdown(),
             const SizedBox(height: 25),
             _buildActionButton("Complete Registration", _validateAndProceed, isLoading: _isLoading),
           ],
@@ -344,8 +319,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ),
     );
   }
-
-  // --- 🛠️ SMALL HELPERS ---
 
   Widget _docTile(String label, File? file, VoidCallback onTap) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
@@ -370,13 +343,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
       ),
     ),
-  );
-
-  Widget _dropdown() => DropdownButtonFormField<String>(
-    value: _selectedCert, 
-    items: ['EMT-B', 'EMT-P', 'Doctor', 'Nurse'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(), 
-    onChanged: (val) => setState(() => _selectedCert = val!), 
-    decoration: InputDecoration(prefixIcon: const Icon(Icons.verified_user_outlined), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide(color: Colors.grey[200]!)))
   );
 
   Widget _buildLogo() => Center(child: Container(width: 50, height: 50, margin: const EdgeInsets.only(bottom: 10), decoration: BoxDecoration(gradient: LinearGradient(colors: [primaryBlue, const Color(0xFF1E3A8A)]), borderRadius: BorderRadius.circular(15)), child: const Icon(Icons.shield, color: Colors.white, size: 25)));
