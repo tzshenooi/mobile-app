@@ -31,13 +31,32 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text.trim(),
       );
 
-      if (response.user != null && mounted) {
-        // Navigate to Driver Home on success
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const DriverHome()),
-        );
+      final user = response.user;
+      if (user == null || !mounted) return;
+
+      final driver = await Supabase.instance.client
+          .from('drivers')
+          .select('status')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      final status = (driver?['status'] ?? 'Pending').toString();
+      if (status == 'Pending') {
+        await Supabase.instance.client.auth.signOut();
+        if (mounted) _showSnackBar("Your account is awaiting dispatcher verification.");
+        return;
       }
+      if (status == 'Rejected') {
+        await Supabase.instance.client.auth.signOut();
+        if (mounted) _showSnackBar("Your account has been rejected. Contact admin.");
+        return;
+      }
+
+      // Navigate to Driver Home on success
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const DriverHome()),
+      );
     } catch (e) {
       if (mounted) _showSnackBar("Login Failed: ${e.toString()}");
     } finally {
