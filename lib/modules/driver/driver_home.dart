@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator_android/geolocator_android.dart';
@@ -16,9 +18,17 @@ class DriverHome extends StatefulWidget {
 }
 
 class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
+  static const MethodChannel _appLifecycleChannel =
+      MethodChannel('smart_ambulance/app_lifecycle');
   final supabase = Supabase.instance.client;
+  final FlutterLocalNotificationsPlugin _localNotifications =
+      FlutterLocalNotificationsPlugin();
   StreamSubscription<Position>? _positionStream;
+  Timer? _missionPollTimer;
   bool _isOnline = false;
+  bool _isInForeground = true;
+  String? _lastMissionPromptId;
+  String? _lastMissionNotificationId;
   String? _activeBookingId;
   Map<String, dynamic>? _activeBookingData; // Added to store mission details
   File? _scenePreview;
@@ -38,27 +48,36 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _initLocalNotifications();
     _listenForNewJobs();
     _checkInitialStatus(); // Added to sync UI on restart
+    _startMissionPolling();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _positionStream?.cancel();
+    _missionPollTimer?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.detached) {
-      _toggleStatus(false);
+    if (state == AppLifecycleState.resumed) {
+      _isInForeground = true;
+      _checkInitialStatus();
+      _syncMissionFromServer();
+    }
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      _isInForeground = false;
     }
   }
 
   // --- 🛠️ CORE FUNCTIONS (PRESERVED LOGIC) ---
 
   Future<void> _checkInitialStatus() async {
+  try {
   final userId = supabase.auth.currentUser?.id;
   if (userId == null) return;
   
@@ -70,7 +89,8 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       .from('bookings')
       .select()
       .eq('driver_id', userId)
-      .filter('status', 'in', '("Accepted", "En Route", "Picked Up")') // Fetch all active states
+      .filter('status', 'in', '("Pending", "Assigned", "Accepted", "En Route", "Picked Up")')
+      .limit(1)
       .maybeSingle();
 
   setState(() {
@@ -84,16 +104,111 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       }
     }
   });
+  } catch (e) {
+    debugPrint("❌ Initial status sync error: $e");
+  }
 }
+
+  void _startMissionPolling() {
+    _missionPollTimer?.cancel();
+    _missionPollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _syncMissionFromServer();
+    });
+  }
+
+  Future<void> _syncMissionFromServer() async {
+    try {
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final booking = await supabase
+          .from('bookings')
+          .select()
+          .eq('driver_id', userId)
+          .filter('status', 'in', '("Pending", "Assigned", "Accepted", "En Route", "Picked Up")')
+          .limit(1)
+          .maybeSingle();
+
+      if (booking == null) {
+        // If no active booking is returned, verify the currently tracked booking
+        // before clearing UI to avoid transient disappearance after app switching.
+        if (_activeBookingId != null) {
+          final current = await supabase
+              .from('bookings')
+              .select()
+              .eq('id', _activeBookingId!)
+              .maybeSingle();
+          if (current == null) return;
+          final st = (current['status'] ?? '').toString().toLowerCase();
+          if (st == 'completed' || st == 'cancelled') {
+            if (mounted) {
+              setState(() {
+                _activeBookingId = null;
+                _activeBookingData = null;
+                _clearEvidencePreviews();
+              });
+            }
+            return;
+          }
+          _activeBookingData = current;
+        }
+        return;
+      }
+
+      final bookingId = booking['id']?.toString();
+      if (bookingId == null) return;
+
+      if (_activeBookingId != bookingId && mounted) {
+        setState(() {
+          final previousBookingId = _activeBookingId;
+          _activeBookingId = bookingId;
+          _activeBookingData = booking;
+          if (previousBookingId != _activeBookingId) {
+            _clearEvidencePreviews();
+          }
+        });
+      } else {
+        _activeBookingData = booking;
+      }
+
+      final status = (booking['status'] ?? '').toString().toLowerCase();
+      final shouldPrompt = status == 'pending' || status == 'assigned';
+
+      if (shouldPrompt) {
+        if (_isInForeground && _lastMissionPromptId != bookingId && mounted) {
+          _lastMissionPromptId = bookingId;
+          _showJobPopup(booking);
+        } else if (!_isInForeground && _lastMissionNotificationId != bookingId) {
+          _lastMissionNotificationId = bookingId;
+          _showDispatchNotification(booking);
+        }
+      }
+    } catch (e) {
+      debugPrint("❌ Mission sync error: $e");
+    }
+  }
 
   Future<void> _toggleStatus(bool value) async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return;
     
-    // Prevent going offline during active mission
-    if (value == false && _activeBookingId != null) {
-      _showSnackBar("Cannot go offline during an active mission.");
-      return;
+    // Prevent going offline during active mission (local + server-side check).
+    if (value == false) {
+      if (_activeBookingId != null) {
+        _showSnackBar("Cannot go offline during an active mission.");
+        return;
+      }
+      final activeMission = await supabase
+          .from('bookings')
+          .select('id')
+          .eq('driver_id', userId)
+          .filter('status', 'in', '("Pending", "Assigned", "Accepted", "En Route", "Picked Up")')
+          .limit(1)
+          .maybeSingle();
+      if (activeMission != null) {
+        _showSnackBar("Cannot go offline during an active mission.");
+        return;
+      }
     }
 
     final data = await supabase.from('drivers').select('status').eq('id', userId).single();
@@ -182,10 +297,42 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       table: 'bookings',
       callback: (payload) {
         if (payload.newRecord['driver_id'] == myId) {
+          _activeBookingId = payload.newRecord['id']?.toString();
+          _activeBookingData = payload.newRecord;
+          if (!_isInForeground) {
+            _showDispatchNotification(payload.newRecord);
+          }
           _showJobPopup(payload.newRecord);
         }
       },
     ).subscribe();
+  }
+
+  Future<void> _initLocalNotifications() async {
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const initSettings = InitializationSettings(android: android);
+    await _localNotifications.initialize(initSettings);
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+  }
+
+  Future<void> _showDispatchNotification(Map<String, dynamic> booking) async {
+    const androidDetails = AndroidNotificationDetails(
+      'dispatch_alerts',
+      'Dispatch Alerts',
+      channelDescription: 'Emergency dispatch alerts for drivers',
+      importance: Importance.max,
+      priority: Priority.high,
+      ticker: 'dispatch',
+    );
+    const details = NotificationDetails(android: androidDetails);
+    await _localNotifications.show(
+      1001,
+      'New Mission Assigned',
+      (booking['location'] ?? 'Open app to acknowledge dispatch').toString(),
+      details,
+    );
   }
 
   String _safeEvidenceExtension(String path) {
@@ -314,6 +461,22 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   }
 
   // Change your popup to look like a Command, not a Choice
+Future<void> _acknowledgeAndNavigate(Map<String, dynamic> booking) async {
+  await supabase.from('bookings').update({'status': 'En Route'}).eq('id', booking['id']);
+  await supabase.from('drivers').update({'status': 'Busy'}).eq('id', supabase.auth.currentUser!.id);
+
+  setState(() {
+    final previousBookingId = _activeBookingId;
+    _activeBookingId = booking['id'].toString();
+    _activeBookingData = {...booking, 'status': 'En Route'};
+    if (previousBookingId != _activeBookingId) {
+      _clearEvidencePreviews();
+    }
+  });
+
+  _launchMaps(booking['latitude'], booking['longitude']);
+}
+
 void _showJobPopup(Map<String, dynamic> booking) {
   showDialog(
     context: context,
@@ -325,21 +488,8 @@ void _showJobPopup(Map<String, dynamic> booking) {
         ElevatedButton(
           child: const Text("ACKNOWLEDGE & NAVIGATE"),
           onPressed: () async {
-  // Update status to 'En Route' so it doesn't disappear
-  await supabase.from('bookings').update({'status': 'En Route'}).eq('id', booking['id']);
-  await supabase.from('drivers').update({'status': 'Busy'}).eq('id', supabase.auth.currentUser!.id);
-  
-  setState(() { 
-    final previousBookingId = _activeBookingId;
-    _activeBookingId = booking['id'].toString(); 
-    _activeBookingData = booking;
-    if (previousBookingId != _activeBookingId) {
-      _clearEvidencePreviews();
-    }
-  });
-  
-  Navigator.pop(context);
-  _launchMaps(booking['latitude'], booking['longitude']);
+  await _acknowledgeAndNavigate(booking);
+  if (mounted) Navigator.pop(context);
 },
         ),
       ],
@@ -362,32 +512,38 @@ void _showJobPopup(Map<String, dynamic> booking) {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: bgGray,
-      body: Stack(
-        children: [
-          SingleChildScrollView(
-            child: Column(
-              children: [
-                _buildTacticalHeader(),
-                _buildFloatingStatusCard(),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 25),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("Active Missions", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-                      const SizedBox(height: 15),
-                      if (_activeBookingId != null) _buildProfessionalMissionCard() else _buildEmptyState(),
-                      const SizedBox(height: 120), // Padding for bottom nav
-                    ],
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        await _appLifecycleChannel.invokeMethod('moveTaskToBack');
+      },
+      child: Scaffold(
+        backgroundColor: bgGray,
+        body: Stack(
+          children: [
+            SingleChildScrollView(
+              child: Column(
+                children: [
+                  _buildTacticalHeader(),
+                  _buildFloatingStatusCard(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 25),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Active Missions", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                        const SizedBox(height: 15),
+                        if (_activeBookingId != null) _buildProfessionalMissionCard() else _buildEmptyState(),
+                        const SizedBox(height: 120), // Padding for bottom nav
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          _buildBottomNav(),
-        ],
+            _buildBottomNav(),
+          ],
+        ),
       ),
     );
   }
@@ -537,6 +693,22 @@ final bool hasHandoverEvidence =
         const SizedBox(height: 25),
 
         _buildEvidenceStrip(),
+
+        if (status.contains('pending') || status.contains('assigned')) ...[
+          ElevatedButton(
+            onPressed: () async => _acknowledgeAndNavigate(_activeBookingData!),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: primaryBlue,
+              minimumSize: const Size(double.infinity, 52),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text(
+              "ACKNOWLEDGE & NAVIGATE",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
 
         // --- 🚑 PHASE 1: ARRIVAL & SECURING PATIENT ---
         if (isPhase1) ...[
