@@ -130,11 +130,17 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
 
   Future<bool> _handleLocationPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return false;
+    if (!serviceEnabled) {
+      _showSnackBar("Please turn on GPS / Location services to go Online.");
+      return false;
+    }
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) return false;
+      if (permission == LocationPermission.denied) {
+        _showSnackBar("Location permission is required to share your ambulance position.");
+        return false;
+      }
     }
     return true;
   }
