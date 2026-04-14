@@ -193,22 +193,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.12"
-  dynamsoft_capture_vision_flutter:
-    dependency: transitive
-    description:
-      name: dynamsoft_capture_vision_flutter
-      sha256: ddf99459ddbdb6bf70eaf348c8d9507972e8c3cbcceaa3a90e990010e56e381a
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.2.5000"
-  dynamsoft_mrz_scanner_bundle_flutter:
-    dependency: "direct main"
-    description:
-      name: dynamsoft_mrz_scanner_bundle_flutter
-      sha256: "9a53d3a8c965a521cf9454d415e203ec4aa90f492c42c48097bb38c971c1c766"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.2.5000"
   ed25519_edwards:
     dependency: transitive
     description:
