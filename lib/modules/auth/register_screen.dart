@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../config/clinic_config.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:async';
 
@@ -173,6 +175,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final AuthResponse res = await Supabase.instance.client.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
+        data: {
+          'role': 'driver',
+          'name': _nameController.text.trim(),
+        },
       );
 
       if (res.user != null) {
@@ -207,16 +213,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
         final licenseUrl = await uploadDocToStorage(licenseFile, _storageBucket, 'licenses');
 
         // No certification_level here — do not rely on DB default (e.g. EMT-B).
-        await Supabase.instance.client.from('drivers').insert({
+        final driverRow = <String, dynamic>{
           'id': userId,
           'name': _nameController.text.trim(),
+          'email': _emailController.text.trim(),
           'ic_number': _icController.text.trim(),
           'phone_number': _phoneController.text.trim(),
           'ic_front_url': icUrl,
           'license_front_url': licenseUrl,
-          'status': 'Pending',
-          // 'certification_level': null,
-        });
+          'status': 'Offline',
+        };
+        if (ClinicConfig.hasClinicId) {
+          driverRow['base_clinic_id'] = ClinicConfig.clinicId;
+        }
+        await Supabase.instance.client.from('drivers').upsert(driverRow);
 
         if (mounted) {
           _showSnackBar("Registration Successful!");

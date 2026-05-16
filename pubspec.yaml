@@ -24,7 +24,12 @@ dependencies:
   google_mlkit_text_recognition: ^0.15.1
   # dynamsoft_mrz_scanner_bundle_flutter: ^3.2.5000
   image_picker: ^1.2.1
+  path_provider: ^2.1.4
+  path: ^1.9.1
+  record: ^6.1.2
   flutter_local_notifications: ^17.2.2
+  video_player: ^2.9.2
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:

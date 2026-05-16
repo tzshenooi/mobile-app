@@ -45,5 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos or short videos for your incident report.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record a short voice note for your incident report.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Add photos from your library to your incident report.</string>
 </dict>
 </plist>

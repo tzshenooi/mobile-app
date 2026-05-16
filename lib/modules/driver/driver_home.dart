@@ -6,9 +6,17 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator_android/geolocator_android.dart';
-import '../auth/login_screen.dart';
+import 'package:smart_ambulance_driver/app_nav.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+
+import 'driver_patient_chat_tab.dart';
+import 'driver_profile_tab.dart';
+import 'driver_records_tab.dart';
+import 'driver_ui.dart';
+import '../shared/patient_report_attachments_panel.dart';
+
+enum _DriverNavTab { home, records, chat, profile }
 
 class DriverHome extends StatefulWidget {
   const DriverHome({super.key});
@@ -33,10 +41,14 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   Map<String, dynamic>? _activeBookingData; // Added to store mission details
   File? _scenePreview;
   File? _handoverPreview;
+  _DriverNavTab _navTab = _DriverNavTab.home;
+  String? _clinicId;
+  String? _clinicName;
+  String? _clinicEmail;
   // 🎨 UI Constants - Tactical Command Theme
-  final Color primaryBlue = const Color(0xFF2563EB);
-  final Color darkBlue = const Color(0xFF1E40AF);
-  final Color bgGray = const Color(0xFFF8FAFC);
+  final Color primaryBlue = DriverUi.primaryBlue;
+  final Color darkBlue = DriverUi.darkBlue;
+  final Color bgGray = DriverUi.bgGray;
   final Color emergencyRed = const Color(0xFFEF4444);
 
   void _clearEvidencePreviews() {
@@ -51,7 +63,31 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     _initLocalNotifications();
     _listenForNewJobs();
     _checkInitialStatus(); // Added to sync UI on restart
+    _loadClinicMeta();
     _startMissionPolling();
+  }
+
+  Future<void> _loadClinicMeta() async {
+    try {
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return;
+      final driver = await supabase
+          .from('drivers')
+          .select('base_clinic_id')
+          .eq('id', userId)
+          .maybeSingle();
+      final clinicId = driver?['base_clinic_id']?.toString();
+      if (clinicId == null || clinicId.isEmpty) return;
+      final clinic = await supabase.from('clinics').select('name, email').eq('id', clinicId).maybeSingle();
+      if (!mounted) return;
+      setState(() {
+        _clinicId = clinicId;
+        _clinicName = clinic?['name']?.toString();
+        _clinicEmail = clinic?['email']?.toString();
+      });
+    } catch (e) {
+      debugPrint('Clinic meta load: $e');
+    }
   }
 
   @override
@@ -94,7 +130,8 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       .maybeSingle();
 
   setState(() {
-    _isOnline = (driverData['status'] == 'Available' || driverData['status'] == 'Busy');
+    final st = (driverData['status'] ?? '').toString();
+    _isOnline = st == 'Available' || st == 'Busy';
     if (activeBooking != null) {
       final previousBookingId = _activeBookingId;
       _activeBookingId = activeBooking['id'].toString();
@@ -209,15 +246,6 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
         _showSnackBar("Cannot go offline during an active mission.");
         return;
       }
-    }
-
-    final data = await supabase.from('drivers').select('status').eq('id', userId).single();
-    if (data['status'] == 'Pending') {
-      _showSnackBar("Your account is awaiting dispatcher verification.");
-      return;
-    } else if (data['status'] == 'Rejected') {
-      _showSnackBar("Your account has been rejected. Contact admin.");
-      return;
     }
 
     if (value) {
@@ -415,60 +443,62 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   }
 }
 
-  Future<void> _completeJob() async {
+  /// Patient secured on scene. Hospital/destination is set on the clinic dispatch portal.
+  Future<void> _securePatient() async {
     if (_activeBookingId == null) return;
     try {
-      final bookingData = await supabase.from('bookings').select().eq('id', _activeBookingId!).single();
-      final List<Map<String, dynamic>> allHospitals = await supabase.from('hospitals').select().gt('beds', 0);
+      final pickedUpAt = DateTime.now().toUtc().toIso8601String();
+      await supabase.from('bookings').update({
+        'status': 'Picked Up',
+        'patient_picked_up_at': pickedUpAt,
+      }).eq('id', _activeBookingId!);
+      final fresh = await supabase.from('bookings').select().eq('id', _activeBookingId!).single();
 
-      Map<String, dynamic>? targetHospital;
-      double minDistance = double.infinity;
-
-      for (var hosp in allHospitals) {
-        double dist = Geolocator.distanceBetween(
-          (bookingData['latitude'] as num).toDouble(), 
-          (bookingData['longitude'] as num).toDouble(), 
-          (hosp['latitude'] as num).toDouble(), 
-          (hosp['longitude'] as num).toDouble()
-        );
-        if (dist < minDistance) {
-          minDistance = dist;
-          targetHospital = hosp;
-        }
+      if (mounted) {
+        setState(() {
+          _activeBookingData = Map<String, dynamic>.from(fresh);
+        });
       }
 
-      if (targetHospital != null) {
-        final updatedBooking = {
-          'status': 'Picked Up',
-          'location': 'Transferring to ${targetHospital['name']}',
-          'latitude': targetHospital['latitude'],
-          'longitude': targetHospital['longitude'],
-          'destination_facility': targetHospital['id'],
-        };
-        await supabase.from('bookings').update(updatedBooking).eq('id', _activeBookingId!);
-
-        if (mounted) {
-          setState(() {
-            _activeBookingData ??= <String, dynamic>{};
-            _activeBookingData!.addAll(updatedBooking);
-          });
-        }
-
-        _launchMaps(targetHospital['latitude'], targetHospital['longitude']);
-        _showSnackBar("Rerouting to ${targetHospital['name']}...");
+      final hospital = (_activeBookingData?['hospital_name'] ?? '').toString().trim();
+      if (hospital.isNotEmpty) {
+        _showSnackBar('Patient secured. Destination: $hospital (from clinic).');
+      } else {
+        _showSnackBar('Patient secured. Clinic will confirm hospital on the portal.');
       }
-    } catch (e) { debugPrint("❌ Reroute Error: $e"); }
+    } catch (e) {
+      debugPrint('❌ Secure patient error: $e');
+      _showSnackBar('Could not update mission status.');
+    }
+  }
+
+  String? _bookingDestinationSummary() {
+    final hospital = (_activeBookingData?['hospital_name'] ?? '').toString().trim();
+    final destType = (_activeBookingData?['destination_type'] ?? '').toString().trim();
+    if (hospital.isEmpty && destType.isEmpty) return null;
+    if (hospital.isNotEmpty && destType.isNotEmpty) {
+      final label = destType.replaceAll('_', ' ');
+      return '$hospital ($label)';
+    }
+    return hospital.isNotEmpty ? hospital : destType;
   }
 
   // Change your popup to look like a Command, not a Choice
 Future<void> _acknowledgeAndNavigate(Map<String, dynamic> booking) async {
-  await supabase.from('bookings').update({'status': 'En Route'}).eq('id', booking['id']);
+  await supabase.from('bookings').update({
+    'status': 'En Route',
+    'ambulance_departed_at': DateTime.now().toUtc().toIso8601String(),
+  }).eq('id', booking['id']);
   await supabase.from('drivers').update({'status': 'Busy'}).eq('id', supabase.auth.currentUser!.id);
 
   setState(() {
     final previousBookingId = _activeBookingId;
     _activeBookingId = booking['id'].toString();
-    _activeBookingData = {...booking, 'status': 'En Route'};
+    _activeBookingData = {
+      ...booking,
+      'status': 'En Route',
+      'ambulance_departed_at': DateTime.now().toUtc().toIso8601String(),
+    };
     if (previousBookingId != _activeBookingId) {
       _clearEvidencePreviews();
     }
@@ -512,6 +542,7 @@ void _showJobPopup(Map<String, dynamic> booking) {
 
   @override
   Widget build(BuildContext context) {
+    final userId = supabase.auth.currentUser?.id ?? '';
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -521,29 +552,57 @@ void _showJobPopup(Map<String, dynamic> booking) {
         backgroundColor: bgGray,
         body: Stack(
           children: [
-            SingleChildScrollView(
-              child: Column(
-                children: [
-                  _buildTacticalHeader(),
-                  _buildFloatingStatusCard(),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 25),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text("Active Missions", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-                        const SizedBox(height: 15),
-                        if (_activeBookingId != null) _buildProfessionalMissionCard() else _buildEmptyState(),
-                        const SizedBox(height: 120), // Padding for bottom nav
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+            IndexedStack(
+              index: _navTab.index,
+              children: [
+                _buildHomeTab(),
+                DriverRecordsTab(driverId: userId),
+                DriverPatientChatTab(
+                  driverId: userId,
+                  isOnDuty: _isOnline,
+                  activeBooking: _activeBookingData,
+                ),
+                DriverProfileTab(
+                  driverId: userId,
+                  onSignOut: () async {
+                    await _toggleStatus(false);
+                    await supabase.auth.signOut();
+                    if (mounted) {
+                      rootNavigatorKey.currentState?.pushNamedAndRemoveUntil('/roles', (_) => false);
+                    }
+                  },
+                ),
+              ],
             ),
             _buildBottomNav(),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildHomeTab() {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          _buildTacticalHeader(),
+          _buildFloatingStatusCard(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 25),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Active Missions",
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                ),
+                const SizedBox(height: 15),
+                if (_activeBookingId != null) _buildProfessionalMissionCard() else _buildEmptyState(),
+                const SizedBox(height: 120),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -581,7 +640,9 @@ void _showJobPopup(Map<String, dynamic> booking) {
             onPressed: () async {
               await _toggleStatus(false);
               await supabase.auth.signOut();
-              if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
+              if (mounted) {
+                rootNavigatorKey.currentState?.pushNamedAndRemoveUntil('/roles', (_) => false);
+              }
             },
           )
         ],
@@ -690,6 +751,14 @@ final bool hasHandoverEvidence =
             Expanded(child: Text(_activeBookingData?['location'] ?? "Syncing location...", style: const TextStyle(color: Colors.grey))),
           ],
         ),
+        if (_activeBookingData?['patient_report_id'] != null) ...[
+          const SizedBox(height: 16),
+          PatientReportAttachmentsPanel(
+            patientReportId: _activeBookingData!['patient_report_id'].toString(),
+            inlinePreview: true,
+            accentColor: primaryBlue,
+          ),
+        ],
         const SizedBox(height: 25),
 
         _buildEvidenceStrip(),
@@ -724,7 +793,6 @@ final bool hasHandoverEvidence =
             ),
           ),
           const SizedBox(height: 12),
-          // Step 2: Secure & Reroute Button
           if (!hasSceneEvidence)
             const Padding(
               padding: EdgeInsets.only(bottom: 8),
@@ -733,9 +801,9 @@ final bool hasHandoverEvidence =
                 style: TextStyle(fontSize: 12, color: Colors.blueGrey),
               ),
             ),
-          if (hasSceneEvidence)
+          if (hasSceneEvidence) ...[
             ElevatedButton(
-              onPressed: _completeJob, // Your existing reroute logic
+              onPressed: _securePatient,
               style: ElevatedButton.styleFrom(
                 backgroundColor: primaryBlue,
                 minimumSize: const Size(double.infinity, 55),
@@ -745,16 +813,42 @@ final bool hasHandoverEvidence =
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.local_hospital_rounded, color: Colors.white),
+                  Icon(Icons.verified_user_rounded, color: Colors.white),
                   SizedBox(width: 10),
-                  Text("SECURE PATIENT & REROUTE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text('SECURE PATIENT', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                 ],
               ),
             ),
+          ],
         ],
 
         // --- 🏥 PHASE 2: HOSPITAL DISCHARGE ---
         if (isPhase2) ...[
+          if (_bookingDestinationSummary() != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.local_hospital_outlined, color: primaryBlue, size: 18),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Clinic destination: ${_bookingDestinationSummary()}',
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF475569), fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ] else ...[
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text(
+                'Waiting for clinic to confirm hospital destination on the portal.',
+                style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+              ),
+            ),
+          ],
           // Step 1: Handover Confirmation Button
           ElevatedButton.icon(
             onPressed: () => _takePhoto("handover"),
@@ -779,7 +873,21 @@ final bool hasHandoverEvidence =
           if (hasHandoverEvidence)
             OutlinedButton(
               onPressed: () async {
-                await supabase.from('bookings').update({'status': 'Completed'}).eq('id', _activeBookingId!);
+                final nowIso = DateTime.now().toUtc().toIso8601String();
+                final completePatch = <String, dynamic>{
+                  'status': 'Completed',
+                  'discharge_completed_at': nowIso,
+                };
+                if (_activeBookingData?['ambulance_departed_at'] == null) {
+                  completePatch['ambulance_departed_at'] = nowIso;
+                }
+                if (_activeBookingData?['patient_picked_up_at'] == null) {
+                  completePatch['patient_picked_up_at'] = nowIso;
+                }
+                await supabase
+                    .from('bookings')
+                    .update(completePatch)
+                    .eq('id', _activeBookingId!);
                 await supabase.from('drivers').update({'status': 'Available'}).eq('id', supabase.auth.currentUser!.id);
               setState(() {
                 _activeBookingId = null;
@@ -908,9 +1016,8 @@ Widget _buildEvidenceThumbnail(String label, {File? file, String? url}) {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _navIcon(Icons.home_filled, true),
-              _navIcon(Icons.description_outlined, false),
-              // Dynamic Navigate Button
+              _navIcon(Icons.home_filled, _navTab == _DriverNavTab.home, () => setState(() => _navTab = _DriverNavTab.home)),
+              _navIcon(Icons.description_outlined, _navTab == _DriverNavTab.records, () => setState(() => _navTab = _DriverNavTab.records)),
               GestureDetector(
                 onTap: () {
                   if (_activeBookingData != null) {
@@ -920,13 +1027,14 @@ Widget _buildEvidenceThumbnail(String label, {File? file, String? url}) {
                   }
                 },
                 child: Container(
-                  height: 55, width: 55,
+                  height: 55,
+                  width: 55,
                   decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                   child: Icon(Icons.navigation_rounded, color: darkBlue, size: 30),
                 ),
               ),
-              _navIcon(Icons.message_outlined, false),
-              _navIcon(Icons.person_outline, false),
+              _navIcon(Icons.message_outlined, _navTab == _DriverNavTab.chat, () => setState(() => _navTab = _DriverNavTab.chat)),
+              _navIcon(Icons.person_outline, _navTab == _DriverNavTab.profile, () => setState(() => _navTab = _DriverNavTab.profile)),
             ],
           ),
         ),
@@ -934,7 +1042,14 @@ Widget _buildEvidenceThumbnail(String label, {File? file, String? url}) {
     );
   }
 
-  Widget _navIcon(IconData icon, bool isActive) {
-    return Icon(icon, color: isActive ? Colors.white : Colors.white54, size: 26);
+  Widget _navIcon(IconData icon, bool isActive, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        child: Icon(icon, color: isActive ? Colors.white : Colors.white54, size: 26),
+      ),
+    );
   }
 }
