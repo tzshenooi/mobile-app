@@ -2,11 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator_android/geolocator_android.dart';
 import 'package:smart_ambulance_driver/app_nav.dart';
+import 'package:smart_ambulance_driver/services/local_notification_service.dart';
+import 'package:smart_ambulance_driver/services/driver_scheduled_missions_service.dart';
+import 'package:smart_ambulance_driver/services/driver_scheduled_alert_coordinator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 
@@ -29,8 +31,6 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   static const MethodChannel _appLifecycleChannel =
       MethodChannel('smart_ambulance/app_lifecycle');
   final supabase = Supabase.instance.client;
-  final FlutterLocalNotificationsPlugin _localNotifications =
-      FlutterLocalNotificationsPlugin();
   StreamSubscription<Position>? _positionStream;
   Timer? _missionPollTimer;
   bool _isOnline = false;
@@ -45,6 +45,8 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   String? _clinicId;
   String? _clinicName;
   String? _clinicEmail;
+  List<Map<String, dynamic>> _scheduledMissions = [];
+  final _scheduledAlertCoordinator = DriverScheduledAlertCoordinator();
   // 🎨 UI Constants - Tactical Command Theme
   final Color primaryBlue = DriverUi.primaryBlue;
   final Color darkBlue = DriverUi.darkBlue;
@@ -60,11 +62,11 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initLocalNotifications();
     _listenForNewJobs();
     _checkInitialStatus(); // Added to sync UI on restart
     _loadClinicMeta();
     _startMissionPolling();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncScheduledMissions());
   }
 
   Future<void> _loadClinicMeta() async {
@@ -104,6 +106,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       _isInForeground = true;
       _checkInitialStatus();
       _syncMissionFromServer();
+      _syncScheduledMissions();
     }
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
       _isInForeground = false;
@@ -150,7 +153,72 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     _missionPollTimer?.cancel();
     _missionPollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _syncMissionFromServer();
+      _syncScheduledMissions();
     });
+  }
+
+  Future<void> _syncScheduledMissions() async {
+    try {
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final rows = await DriverScheduledMissionsService.loadForDriver(supabase, userId);
+      if (mounted) setState(() => _scheduledMissions = rows);
+
+      await _scheduledAlertCoordinator.process(
+        bookings: rows,
+        inForeground: _isInForeground,
+        onNotify: (b) => LocalNotificationService.instance.showScheduledPickupReminder(booking: b),
+        onShowDialog: _showScheduledAcknowledgeDialog,
+        onCancelNotify: (id) => LocalNotificationService.instance.cancelScheduledReminder(id),
+      );
+    } catch (e) {
+      debugPrint('Scheduled sync error: $e');
+    }
+  }
+
+  Future<void> _showScheduledAcknowledgeDialog(Map<String, dynamic> booking) async {
+    if (!mounted) return;
+    final id = booking['id']?.toString();
+    if (id == null) return;
+    final patient = booking['patient_name']?.toString() ?? 'Patient';
+    final pickup = DriverScheduledMissionsService.formatPickupLabel(booking);
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Scheduled pickup'),
+        content: Text(
+          'Pickup for $patient is coming up ($pickup).\n\n'
+          '${booking['location'] ?? ''}\n\n'
+          'Acknowledge to stop alerts. Start the mission when you are ready to go.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await DriverScheduledMissionsService.acknowledgePickup(supabase, id);
+              _scheduledAlertCoordinator.clear(id);
+              await LocalNotificationService.instance.cancelScheduledReminder(id);
+              if (ctx.mounted) Navigator.pop(ctx);
+              _syncScheduledMissions();
+            },
+            child: const Text('ACKNOWLEDGE'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await DriverScheduledMissionsService.startMissionNow(supabase, id);
+              _scheduledAlertCoordinator.clear(id);
+              await LocalNotificationService.instance.cancelScheduledReminder(id);
+              if (ctx.mounted) Navigator.pop(ctx);
+              await _syncMissionFromServer();
+              _syncScheduledMissions();
+            },
+            child: const Text('START MISSION NOW'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _syncMissionFromServer() async {
@@ -217,7 +285,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
           _showJobPopup(booking);
         } else if (!_isInForeground && _lastMissionNotificationId != bookingId) {
           _lastMissionNotificationId = bookingId;
-          _showDispatchNotification(booking);
+          LocalNotificationService.instance.showDriverDispatch(booking: booking);
         }
       }
     } catch (e) {
@@ -324,43 +392,32 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       schema: 'public',
       table: 'bookings',
       callback: (payload) {
-        if (payload.newRecord['driver_id'] == myId) {
-          _activeBookingId = payload.newRecord['id']?.toString();
-          _activeBookingData = payload.newRecord;
-          if (!_isInForeground) {
-            _showDispatchNotification(payload.newRecord);
-          }
-          _showJobPopup(payload.newRecord);
+        if (payload.newRecord['driver_id'] != myId) return;
+        final status = (payload.newRecord['status'] ?? '').toString();
+        if (status == DriverScheduledMissionsService.scheduledStatus) {
+          _syncScheduledMissions();
+          return;
+        }
+        _activeBookingId = payload.newRecord['id']?.toString();
+        _activeBookingData = payload.newRecord;
+        if (!_isInForeground) {
+          LocalNotificationService.instance.showDriverDispatch(booking: payload.newRecord);
+        }
+        _showJobPopup(payload.newRecord);
+      },
+    )
+        .onPostgresChanges(
+      event: PostgresChangeEvent.update,
+      schema: 'public',
+      table: 'bookings',
+      callback: (payload) {
+        if (payload.newRecord['driver_id'] != myId) return;
+        final status = (payload.newRecord['status'] ?? '').toString();
+        if (status == DriverScheduledMissionsService.scheduledStatus) {
+          _syncScheduledMissions();
         }
       },
     ).subscribe();
-  }
-
-  Future<void> _initLocalNotifications() async {
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettings = InitializationSettings(android: android);
-    await _localNotifications.initialize(initSettings);
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
-  }
-
-  Future<void> _showDispatchNotification(Map<String, dynamic> booking) async {
-    const androidDetails = AndroidNotificationDetails(
-      'dispatch_alerts',
-      'Dispatch Alerts',
-      channelDescription: 'Emergency dispatch alerts for drivers',
-      importance: Importance.max,
-      priority: Priority.high,
-      ticker: 'dispatch',
-    );
-    const details = NotificationDetails(android: androidDetails);
-    await _localNotifications.show(
-      1001,
-      'New Mission Assigned',
-      (booking['location'] ?? 'Open app to acknowledge dispatch').toString(),
-      details,
-    );
   }
 
   String _safeEvidenceExtension(String path) {
@@ -592,6 +649,15 @@ void _showJobPopup(Map<String, dynamic> booking) {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (_scheduledMissions.isNotEmpty) ...[
+                  const Text(
+                    'Upcoming schedule',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                  ),
+                  const SizedBox(height: 12),
+                  ..._scheduledMissions.map(_buildScheduledMissionCard),
+                  const SizedBox(height: 24),
+                ],
                 const Text(
                   "Active Missions",
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
@@ -695,6 +761,91 @@ void _showJobPopup(Map<String, dynamic> booking) {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildScheduledMissionCard(Map<String, dynamic> booking) {
+    final id = booking['id']?.toString() ?? '';
+    final ack = DriverScheduledMissionsService.isAcknowledged(booking);
+    final alerting = DriverScheduledMissionsService.isInAlertWindow(booking);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: alerting ? Colors.orange.shade50 : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: alerting ? Colors.orange : primaryBlue.withValues(alpha: 0.15)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('SCHEDULED', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, letterSpacing: 1)),
+              const Spacer(),
+              if (alerting && !ack)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(8)),
+                  child: const Text('ACK REQUIRED', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
+                )
+              else if (ack)
+                const Text('Acknowledged', style: TextStyle(color: Colors.green, fontSize: 11, fontWeight: FontWeight.w600)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            booking['patient_name']?.toString() ?? 'Patient',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            DriverScheduledMissionsService.formatPickupLabel(booking),
+            style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+          ),
+          Text(
+            DriverScheduledMissionsService.minutesUntilPickup(booking),
+            style: const TextStyle(color: Colors.blueGrey, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(booking['location']?.toString() ?? '', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: id.isEmpty
+                      ? null
+                      : () async {
+                          await DriverScheduledMissionsService.acknowledgePickup(supabase, id);
+                          _scheduledAlertCoordinator.clear(id);
+                          await LocalNotificationService.instance.cancelScheduledReminder(id);
+                          _syncScheduledMissions();
+                        },
+                  child: const Text('Acknowledge'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  onPressed: id.isEmpty
+                      ? null
+                      : () async {
+                          await DriverScheduledMissionsService.startMissionNow(supabase, id);
+                          _scheduledAlertCoordinator.clear(id);
+                          await LocalNotificationService.instance.cancelScheduledReminder(id);
+                          await _syncMissionFromServer();
+                          _syncScheduledMissions();
+                        },
+                  style: FilledButton.styleFrom(backgroundColor: primaryBlue),
+                  child: const Text('Start now'),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

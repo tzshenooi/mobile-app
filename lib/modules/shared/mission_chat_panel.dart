@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/local_notification_service.dart';
 import '../driver/driver_ui.dart';
 import 'mission_chat_service.dart';
 
@@ -31,19 +32,23 @@ class MissionChatPanel extends StatefulWidget {
   State<MissionChatPanel> createState() => _MissionChatPanelState();
 }
 
-class _MissionChatPanelState extends State<MissionChatPanel> {
+class _MissionChatPanelState extends State<MissionChatPanel>
+    with WidgetsBindingObserver {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   List<Map<String, dynamic>> _messages = [];
   bool _loading = true;
   bool _sending = false;
   bool _tableMissing = false;
+  bool _appInForeground = true;
+  String? _lastNotifiedMessageId;
   Timer? _pollTimer;
   RealtimeChannel? _channel;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _load(silent: true));
     _subscribeRealtime();
@@ -61,6 +66,7 @@ class _MissionChatPanelState extends State<MissionChatPanel> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _channel?.unsubscribe();
     _textController.dispose();
@@ -86,6 +92,31 @@ class _MissionChatPanelState extends State<MissionChatPanel> {
         .subscribe();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appInForeground = state == AppLifecycleState.resumed;
+  }
+
+  void _maybeNotifyPeerMessage(List<Map<String, dynamic>> rows) {
+    if (_appInForeground || rows.isEmpty) return;
+    final myRole = widget.isDriver ? 'driver' : 'patient';
+    for (var i = rows.length - 1; i >= 0; i--) {
+      final message = rows[i];
+      final role = message['sender_role']?.toString();
+      if (role == myRole) continue;
+      final id = message['id']?.toString();
+      if (id == null || id == _lastNotifiedMessageId) return;
+      _lastNotifiedMessageId = id;
+      final preview = message['body']?.toString() ?? 'New message';
+      LocalNotificationService.instance.showChatMessage(
+        senderLabel: widget.peerLabel,
+        preview: preview,
+        idSeed: id.hashCode,
+      );
+      return;
+    }
+  }
+
   Future<void> _load({bool silent = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
     try {
@@ -96,6 +127,7 @@ class _MissionChatPanelState extends State<MissionChatPanel> {
         _loading = false;
         _tableMissing = false;
       });
+      _maybeNotifyPeerMessage(rows);
       _scrollToEnd();
     } catch (e) {
       if (!mounted) return;

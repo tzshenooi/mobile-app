@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/local_notification_service.dart';
 import 'patient_mission_loader.dart';
 import 'patient_mission_progress.dart';
 import 'patient_tracking_map.dart';
@@ -21,7 +22,8 @@ class AmbulanceTrackingScreen extends StatefulWidget {
   State<AmbulanceTrackingScreen> createState() => _AmbulanceTrackingScreenState();
 }
 
-class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen> {
+class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen>
+    with WidgetsBindingObserver {
   final _client = Supabase.instance.client;
 
   Map<String, dynamic>? _report;
@@ -30,6 +32,9 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen> {
   Map<String, dynamic>? _clinic;
   bool _loading = true;
   String? _error;
+  bool _appInForeground = true;
+  String? _lastNotifiedStatus;
+  String? _lastNotifiedDriverId;
 
   RealtimeChannel? _channel;
   Timer? _pollTimer;
@@ -37,6 +42,7 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       if (!mounted || _loading) return;
@@ -46,6 +52,7 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _channel?.unsubscribe();
     super.dispose();
@@ -86,7 +93,57 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen> {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appInForeground = state == AppLifecycleState.resumed;
+  }
+
+  Future<void> _maybeNotifyMissionUpdate({
+    required Map<String, dynamic>? previous,
+    required Map<String, dynamic> next,
+  }) async {
+    if (_appInForeground) return;
+
+    final status = next['status']?.toString();
+    final driverId = next['driver_id']?.toString();
+    final driverMap =
+        PatientMissionLoader.parseNestedMap(next['drivers']) ?? _driver;
+    final driverName = driverMap?['name']?.toString();
+
+    if (driverId != null &&
+        previous?['driver_id'] == null &&
+        _lastNotifiedDriverId != driverId) {
+      _lastNotifiedDriverId = driverId;
+      await LocalNotificationService.instance.showPatientMissionStatus(
+        status: 'Assigned',
+        driverName: driverName,
+      );
+      return;
+    }
+
+    if (status == null || status.isEmpty) return;
+    if (_lastNotifiedStatus == status) return;
+    const notifyStatuses = {
+      'Pending',
+      'Assigned',
+      'Accepted',
+      'En Route',
+      'Picked Up',
+      'Completed',
+      'Cancelled',
+    };
+    if (!notifyStatuses.contains(status)) return;
+    _lastNotifiedStatus = status;
+    await LocalNotificationService.instance.showPatientMissionStatus(
+      status: status,
+      driverName: driverName,
+    );
+  }
+
   Future<void> _applyBookingUpdate(Map<String, dynamic> next) async {
+    final previous = _booking == null
+        ? null
+        : Map<String, dynamic>.from(_booking!);
     final prevDriver = _booking?['driver_id'];
     final merged = Map<String, dynamic>.from(_booking ?? {});
     merged.addAll(next);
@@ -94,6 +151,7 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen> {
       _booking = merged;
       _driver = PatientMissionLoader.parseNestedMap(_booking?['drivers']) ?? _driver;
     });
+    await _maybeNotifyMissionUpdate(previous: previous, next: merged);
     if (next['driver_id'] != prevDriver) {
       await _refreshDriver();
       _subscribeRealtime();

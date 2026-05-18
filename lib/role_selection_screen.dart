@@ -7,76 +7,82 @@ import 'modules/patient/patient_auth_shell.dart';
 class RoleSelectionScreen extends StatelessWidget {
   const RoleSelectionScreen({super.key});
 
+  static const Color _driverBlue = Color(0xFF2563EB);
+  static const Color _patientRed = Color(0xFFE74C3C);
+
   @override
   Widget build(BuildContext context) {
-    final accent = Theme.of(context).colorScheme.primary;
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 24),
+              const SizedBox(height: 28),
               Text(
                 'Smart Ambulance',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               Text(
-                'Who is using this device?',
+                'Sign in as',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey.shade700, fontSize: 16),
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
               ),
-              const Spacer(),
+              const SizedBox(height: 36),
+              _RoleCard(
+                icon: Icons.health_and_safety_rounded,
+                title: 'I need help',
+                subtitle: 'Request an ambulance.',
+                accent: _patientRed,
+                iconBackground: const Color(0xFFFCE8E6),
+                onTap: () => _openPatient(context),
+              ),
+              const SizedBox(height: 14),
               _RoleCard(
                 icon: Icons.local_hospital_rounded,
-                title: 'Ambulance driver',
-                subtitle: 'Receive dispatches, navigation, and mission photos.',
-                color: accent,
-                onTap: () {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute<void>(
-                      builder: (shellCtx) => DriverAuthShell(
-                        onBackToRoles: () {
-                          Navigator.of(shellCtx).pushReplacement(
-                            MaterialPageRoute<void>(builder: (_) => const RoleSelectionScreen()),
-                          );
-                        },
-                      ),
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 16),
-              _RoleCard(
-                icon: Icons.health_and_safety_outlined,
-                title: 'Patient / bystander',
-                subtitle: 'Report a medical emergency or call your clinic from the app.',
-                color: const Color(0xFFC62828),
-                onTap: () {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute<void>(
-                      builder: (shellCtx) => PatientAuthShell(
-                        onBackToRoles: () {
-                          Navigator.of(shellCtx).pushReplacement(
-                            MaterialPageRoute<void>(builder: (_) => const RoleSelectionScreen()),
-                          );
-                        },
-                      ),
-                    ),
-                  );
-                },
-              ),
-              const Spacer(),
-              Text(
-                'Use the correct role so your account is checked against the right profile.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600, height: 1.35),
+                title: "I'm a driver",
+                subtitle: 'Dispatcher & dispatch portal.',
+                accent: _driverBlue,
+                iconBackground: const Color(0xFFE3EDFF),
+                onTap: () => _openDriver(context),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  void _openDriver(BuildContext context) {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (shellCtx) => DriverAuthShell(
+          onBackToRoles: () {
+            Navigator.of(shellCtx).pushReplacement(
+              MaterialPageRoute<void>(builder: (_) => const RoleSelectionScreen()),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  void _openPatient(BuildContext context) {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (shellCtx) => PatientAuthShell(
+          onBackToRoles: () {
+            Navigator.of(shellCtx).pushReplacement(
+              MaterialPageRoute<void>(builder: (_) => const RoleSelectionScreen()),
+            );
+          },
         ),
       ),
     );
@@ -88,50 +94,63 @@ class _RoleCard extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
-    required this.color,
+    required this.accent,
+    required this.iconBackground,
     required this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
-  final Color color;
+  final Color accent;
+  final Color iconBackground;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Material(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      elevation: 2,
-      shadowColor: Colors.black12,
+      borderRadius: BorderRadius.circular(16),
+      elevation: 1.5,
+      shadowColor: Colors.black26,
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(14),
+                width: 52,
+                height: 52,
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
+                  color: iconBackground,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Icon(icon, color: color, size: 32),
+                child: Icon(icon, color: accent, size: 28),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black87,
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text(subtitle, style: TextStyle(fontSize: 13, color: Colors.grey.shade700, height: 1.35)),
+                    Text(
+                      subtitle,
+                      style: TextStyle(fontSize: 13, color: Colors.grey.shade600, height: 1.3),
+                    ),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right_rounded, color: Colors.grey.shade400),
+              Icon(Icons.chevron_right_rounded, color: Colors.grey.shade400, size: 26),
             ],
           ),
         ),

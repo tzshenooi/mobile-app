@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_nav.dart';
 import 'role_selection_screen.dart';
+import 'services/local_notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -13,6 +14,8 @@ void main() async {
     url: 'https://yvzylhestgcygwsjbaut.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl2enlsaGVzdGdjeWd3c2piYXV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjMxMDMsImV4cCI6MjA4MzU5OTEwM30.BAHSq367fKLk9gi0HHQ5vQcHezd9zDVhjrErBdADeoo',
   );
+
+  await LocalNotificationService.instance.initialize();
 
   runApp(const MyApp());
 }

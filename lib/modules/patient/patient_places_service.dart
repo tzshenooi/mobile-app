@@ -35,6 +35,8 @@ class PatientPlacesStatus {
   static String? lastError;
   static String? lastStatus;
   static bool lastUsedGoogle = false;
+  /// Set when the API key is HTTP-referrer restricted (web-only) and mobile calls get 403.
+  static bool googleBlockedForMobile = false;
 }
 
 /// Google Places over HTTP (same data as dispatch). Falls back to Nominatim if the key rejects mobile calls.
@@ -52,6 +54,31 @@ abstract final class PatientPlacesService {
         'X-Goog-Api-Key': googleMapsApiKey,
       };
 
+  static bool _isGoogleBlockedForMobileHttp(http.Response res) {
+    if (res.statusCode != 403) return false;
+    final body = res.body;
+    if (body.contains('API_KEY_HTTP_REFERRER_BLOCKED')) return true;
+    if (body.contains('Android client application') && body.contains('blocked')) {
+      return true;
+    }
+    if (body.contains('referer') && body.contains('blocked')) return true;
+    return false;
+  }
+
+  static void _markGoogleBlockedIfNeeded(http.Response res) {
+    if (!_isGoogleBlockedForMobileHttp(res)) return;
+    if (PatientPlacesStatus.googleBlockedForMobile) return;
+    PatientPlacesStatus.googleBlockedForMobile = true;
+    if (kDebugMode) {
+      debugPrint(
+        '[Places] This Google key cannot be used for address search over HTTP in Flutter '
+        '(web referrer or Android-app restriction). Using OpenStreetMap. '
+        'For Google Places in the app, use a key with Application restrictions = None '
+        'and API restrictions = Places API (New) only — keep a separate Android key for Maps SDK in AndroidManifest.',
+      );
+    }
+  }
+
   /// [newSession] reserved for future session-token billing; ignored for HTTP.
   static Future<List<PatientPlaceSuggestion>> autocomplete(
     String input, {
@@ -64,29 +91,35 @@ abstract final class PatientPlacesService {
     PatientPlacesStatus.lastStatus = null;
     PatientPlacesStatus.lastUsedGoogle = false;
 
-    if (hasGoogleMapsApiKey) {
+    if (hasGoogleMapsApiKey && !PatientPlacesStatus.googleBlockedForMobile) {
       final newApi = await _placesNewAutocomplete(q);
       if (newApi.isNotEmpty) {
         PatientPlacesStatus.lastUsedGoogle = true;
         return newApi;
       }
 
-      final legacy = await _httpAutocomplete(q);
-      if (legacy.isNotEmpty) {
-        PatientPlacesStatus.lastUsedGoogle = true;
-        return legacy;
+      if (!PatientPlacesStatus.googleBlockedForMobile) {
+        final legacy = await _httpAutocomplete(q);
+        if (legacy.isNotEmpty) {
+          PatientPlacesStatus.lastUsedGoogle = true;
+          return legacy;
+        }
       }
 
-      final textSearch = await _placesNewTextSearch(q);
-      if (textSearch.isNotEmpty) {
-        PatientPlacesStatus.lastUsedGoogle = true;
-        return textSearch;
+      if (!PatientPlacesStatus.googleBlockedForMobile) {
+        final textSearch = await _placesNewTextSearch(q);
+        if (textSearch.isNotEmpty) {
+          PatientPlacesStatus.lastUsedGoogle = true;
+          return textSearch;
+        }
       }
 
-      final geo = await _httpGeocodeSearch(q);
-      if (geo.isNotEmpty) {
-        PatientPlacesStatus.lastUsedGoogle = true;
-        return geo;
+      if (!PatientPlacesStatus.googleBlockedForMobile) {
+        final geo = await _httpGeocodeSearch(q);
+        if (geo.isNotEmpty) {
+          PatientPlacesStatus.lastUsedGoogle = true;
+          return geo;
+        }
       }
     }
 
@@ -96,8 +129,14 @@ abstract final class PatientPlacesService {
     return _nominatimSearch('$q, Malaysia');
   }
 
+  /// True when the last search used OpenStreetMap (Google unavailable on this device).
+  static bool get usingOpenStreetMapFallback =>
+      PatientPlacesStatus.googleBlockedForMobile ||
+      (PatientPlacesStatus.lastUsedGoogle == false &&
+          PatientPlacesStatus.lastError != null);
+
   static Future<PatientPlaceDetails?> fetchPlaceDetails(String placeId) async {
-    if (!hasGoogleMapsApiKey) return null;
+    if (!hasGoogleMapsApiKey || PatientPlacesStatus.googleBlockedForMobile) return null;
 
     final newDetails = await _placesNewFetchDetails(placeId);
     if (newDetails != null) return newDetails;
@@ -119,7 +158,7 @@ abstract final class PatientPlacesService {
   }
 
   static Future<String?> reverseAddress(LatLng point) async {
-    if (hasGoogleMapsApiKey) {
+    if (hasGoogleMapsApiKey && !PatientPlacesStatus.googleBlockedForMobile) {
       final g = await _httpReverse(point);
       if (g != null && g.isNotEmpty) return g;
     }
@@ -140,7 +179,10 @@ abstract final class PatientPlacesService {
           .post(uri, headers: _googleKeyHeaders, body: body)
           .timeout(_timeout);
       if (res.statusCode != 200) {
-        if (kDebugMode) debugPrint('[Places New autocomplete] HTTP ${res.statusCode}: ${res.body}');
+        _markGoogleBlockedIfNeeded(res);
+        if (kDebugMode && !PatientPlacesStatus.googleBlockedForMobile) {
+          debugPrint('[Places New autocomplete] HTTP ${res.statusCode}: ${res.body}');
+        }
         _recordNewApiError(res);
         return [];
       }
@@ -293,7 +335,10 @@ abstract final class PatientPlacesService {
           .timeout(_timeout);
 
       if (res.statusCode != 200) {
-        if (kDebugMode) debugPrint('[Places New text search] HTTP ${res.statusCode}: ${res.body}');
+        _markGoogleBlockedIfNeeded(res);
+        if (kDebugMode && !PatientPlacesStatus.googleBlockedForMobile) {
+          debugPrint('[Places New text search] HTTP ${res.statusCode}: ${res.body}');
+        }
         _recordNewApiError(res);
         return [];
       }
@@ -348,12 +393,16 @@ abstract final class PatientPlacesService {
     });
 
     final res = await http.get(uri, headers: _jsonHeaders).timeout(_timeout);
-    if (res.statusCode != 200) return [];
+    if (res.statusCode != 200) {
+      _markGoogleBlockedIfNeeded(res);
+      return [];
+    }
 
     final body = json.decode(res.body) as Map<String, dynamic>?;
     final status = body?['status'] as String?;
     if (status != 'OK' && status != 'ZERO_RESULTS') {
       _recordLegacyGoogleStatus(body);
+      if (status == 'REQUEST_DENIED') PatientPlacesStatus.googleBlockedForMobile = true;
       return [];
     }
 
@@ -396,11 +445,15 @@ abstract final class PatientPlacesService {
     });
 
     final res = await http.get(uri, headers: _jsonHeaders).timeout(_timeout);
-    if (res.statusCode != 200) return [];
+    if (res.statusCode != 200) {
+      _markGoogleBlockedIfNeeded(res);
+      return [];
+    }
 
     final body = json.decode(res.body) as Map<String, dynamic>?;
     if (body?['status'] != 'OK') {
       _recordLegacyGoogleStatus(body);
+      if (body?['status'] == 'REQUEST_DENIED') PatientPlacesStatus.googleBlockedForMobile = true;
       return [];
     }
 

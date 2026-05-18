@@ -105,12 +105,14 @@ class _SlideToConfirmState extends State<SlideToConfirm> {
                 ),
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              widget.subtitle,
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade700, height: 1.35),
-              textAlign: TextAlign.center,
-            ),
+            if (widget.subtitle.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                widget.subtitle,
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700, height: 1.35),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ],
         );
       },

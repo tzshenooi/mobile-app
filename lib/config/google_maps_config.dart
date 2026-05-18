@@ -1,8 +1,8 @@
-/// Same key as web `REACT_APP_GOOGLE_MAPS_API_KEY` / native Maps SDK.
+/// Android-restricted key (Places / Geocoding over HTTP). Web portal uses a separate key in `web-app/.env`.
 /// Override: `flutter run --dart-define=GOOGLE_MAPS_API_KEY=your_key`
 const String googleMapsApiKey = String.fromEnvironment(
   'GOOGLE_MAPS_API_KEY',
-  defaultValue: 'AIzaSyBrCE1k3ZRrwa8i44A1zz5QWDE0Vc107ec',
+  defaultValue: 'AIzaSyBHJa1QP-iYRp_mhx-8TK1QEmNnVt4Vz9g',
 );
 
 bool get hasGoogleMapsApiKey => googleMapsApiKey.trim().isNotEmpty;
