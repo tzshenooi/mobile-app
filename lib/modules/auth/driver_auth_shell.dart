@@ -65,7 +65,7 @@ class _DriverGate extends StatelessWidget {
                 SnackBar(
                   content: Text(
                     reason ??
-                        'This login is not a driver account. Choose Patient, or register as a driver.',
+                        'This login is not a driver account. Use Patient, or ask your clinic to add you as a driver.',
                   ),
                 ),
               );

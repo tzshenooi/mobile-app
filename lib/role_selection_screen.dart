@@ -49,7 +49,7 @@ class RoleSelectionScreen extends StatelessWidget {
               _RoleCard(
                 icon: Icons.local_hospital_rounded,
                 title: "I'm a driver",
-                subtitle: 'Dispatcher & dispatch portal.',
+                subtitle: 'Sign in with clinic-provided credentials.',
                 accent: _driverBlue,
                 iconBackground: const Color(0xFFE3EDFF),
                 onTap: () => _openDriver(context),

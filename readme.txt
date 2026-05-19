@@ -56,8 +56,10 @@ flutter pub get
 flutter run
 
 On first launch, choose role:
-  - Ambulance driver — receive clinic dispatches
-  - Patient / bystander — report to your clinic and track response
+  - Ambulance driver — sign in with credentials created by the clinic portal
+  - Patient / bystander — register in-app, then report and track
+
+Drivers are added only from the clinic web portal (not self-registration on mobile).
 
 Supabase keys are in lib/main.dart (use the same project as the web app).
 

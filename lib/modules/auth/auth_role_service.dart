@@ -25,7 +25,7 @@ abstract final class AuthRoleService {
       return 'This account is registered as a patient. Use “I need help” to sign in.';
     }
     if (!await hasDriverRow(client, user.id)) {
-      return 'No driver profile for this email. Register as a driver or ask your clinic to add you.';
+      return 'No driver profile for this email. Ask your clinic to add you as a driver on the portal first.';
     }
     return null;
   }

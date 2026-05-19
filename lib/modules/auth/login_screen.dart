@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth_role_service.dart';
-import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.onBackToRoles});
@@ -68,12 +67,6 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _openRegister() {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const RegisterScreen()),
-    );
-  }
-
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: Colors.red[800], behavior: SnackBarBehavior.floating),
@@ -117,7 +110,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     const Text('Smart Ambulance Dispatch', style: TextStyle(color: Colors.grey, fontSize: 14)),
                     const SizedBox(height: 8),
                     const Text(
-                      'Use the email and password from your clinic, or register below to start immediately.',
+                      'Use the email and password your clinic gave you after they add you as a driver.',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.grey, fontSize: 12, height: 1.35),
                     ),
@@ -126,14 +119,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     _buildInputField(_passwordController, 'Password', Icons.lock_outline, isPass: true),
                     const SizedBox(height: 25),
                     _buildActionButton('Sign In', _handleLogin, isLoading: _isLoading),
-                    const SizedBox(height: 12),
-                    TextButton(
-                      onPressed: _isLoading ? null : _openRegister,
-                      child: Text(
-                        'New driver? Register with IC & license',
-                        style: TextStyle(color: primaryBlue, fontWeight: FontWeight.w600),
-                      ),
-                    ),
                   ],
                 ),
               ),
