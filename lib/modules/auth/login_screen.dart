@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'auth_role_service.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -53,7 +54,13 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      // DriverAuthShell auto-creates the linked drivers row if missing.
+      final client = Supabase.instance.client;
+      final denied = await AuthRoleService.driverAccessDeniedReason(client, user);
+      if (denied != null) {
+        await client.auth.signOut();
+        if (mounted) _showSnackBar(denied);
+        return;
+      }
     } catch (e) {
       if (mounted) _showSnackBar(_friendlyAuthError(e));
     } finally {

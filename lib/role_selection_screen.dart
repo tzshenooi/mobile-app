@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'modules/auth/driver_auth_shell.dart';
 import 'modules/patient/patient_auth_shell.dart';
@@ -60,7 +61,9 @@ class RoleSelectionScreen extends StatelessWidget {
     );
   }
 
-  void _openDriver(BuildContext context) {
+  Future<void> _openDriver(BuildContext context) async {
+    await Supabase.instance.client.auth.signOut();
+    if (!context.mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (shellCtx) => DriverAuthShell(
@@ -74,7 +77,9 @@ class RoleSelectionScreen extends StatelessWidget {
     );
   }
 
-  void _openPatient(BuildContext context) {
+  Future<void> _openPatient(BuildContext context) async {
+    await Supabase.instance.client.auth.signOut();
+    if (!context.mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (shellCtx) => PatientAuthShell(

@@ -10,6 +10,8 @@ import 'patient_mission_progress.dart';
 import 'patient_tracking_map.dart';
 import 'patient_ui.dart';
 import '../shared/mission_chat_panel.dart';
+import '../shared/mission_chat_transcript_panel.dart';
+import '../shared/mission_record_evidence_section.dart';
 import '../shared/patient_report_attachments_panel.dart';
 
 /// Live ambulance progress + ETA for a patient report.
@@ -43,6 +45,9 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LocalNotificationService.instance.ensureCanNotify();
+    });
     _load();
     _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       if (!mounted || _loading) return;
@@ -70,6 +75,9 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen>
       final uid = _client.auth.currentUser?.id;
       if (uid == null) throw Exception('Sign in again.');
 
+      final previousBooking =
+          _booking == null ? null : Map<String, dynamic>.from(_booking!);
+
       final data = await PatientMissionLoader.load(
         client: _client,
         patientReportId: widget.patientReportId,
@@ -81,6 +89,13 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen>
       _driver = data.driver;
       await _loadClinicIfNeeded();
       _subscribeRealtime();
+
+      if (_booking != null) {
+        await _maybeNotifyMissionUpdate(
+          previous: previousBooking,
+          next: Map<String, dynamic>.from(_booking!),
+        );
+      }
 
       if (mounted) setState(() => _loading = false);
     } catch (e) {
@@ -372,14 +387,27 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen>
                         inlinePreview: true,
                         useCurrentUserAsReporter: true,
                       ),
-                      if (!progress.isActive)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Text(
+                      if (!progress.isActive && _booking != null) ...[
+                        const SizedBox(height: 16),
+                        if (_booking!['status']?.toString() == 'Completed')
+                          MissionRecordEvidenceSection(
+                            booking: _booking!,
+                            patientReportId: widget.patientReportId,
+                            forPatient: true,
+                          )
+                        else ...[
+                          const Text(
                             'This mission is no longer active.',
-                            style: TextStyle(color: Colors.grey.shade600),
+                            style: TextStyle(color: Colors.grey),
                           ),
-                        ),
+                          const SizedBox(height: 12),
+                          MissionChatTranscriptPanel(
+                            bookingId: _booking!['id'].toString(),
+                            isDriverView: false,
+                            accentColor: PatientUi.accentRed,
+                          ),
+                        ],
+                      ],
                       if (_booking != null &&
                           _booking!['driver_id'] != null &&
                           kPatientActiveMissionStatuses.contains(_booking!['status']?.toString())) ...[

@@ -1,13 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../shared/mission_record_evidence_section.dart';
 import 'driver_ui.dart';
 
 /// Completed missions for this driver (Records tab).
 class DriverRecordsTab extends StatefulWidget {
-  const DriverRecordsTab({super.key, required this.driverId});
+  const DriverRecordsTab({
+    super.key,
+    required this.driverId,
+    this.isVisible = false,
+  });
 
   final String driverId;
+  /// Reload when the Records tab becomes active (IndexedStack keeps state otherwise).
+  final bool isVisible;
 
   @override
   State<DriverRecordsTab> createState() => _DriverRecordsTabState();
@@ -25,6 +32,14 @@ class _DriverRecordsTabState extends State<DriverRecordsTab> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(DriverRecordsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isVisible && !oldWidget.isVisible) {
+      _load();
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -35,6 +50,7 @@ class _DriverRecordsTabState extends State<DriverRecordsTab> {
           .from('bookings')
           .select(
             'id, patient_name, patient_id, location, status, emergency_type, '
+            'patient_report_id, scene_photo, handover_photo, '
             'discharge_completed_at, patient_picked_up_at, requested_at, created_at, notes',
           )
           .eq('driver_id', widget.driverId)
@@ -71,30 +87,55 @@ class _DriverRecordsTabState extends State<DriverRecordsTab> {
       ),
       builder: (ctx) {
         final when = _parseTime(row);
-        return Padding(
-          padding: EdgeInsets.fromLTRB(24, 20, 24, MediaQuery.paddingOf(ctx).bottom + 24),
+        final maxH = MediaQuery.sizeOf(ctx).height * 0.88;
+        return SizedBox(
+          height: maxH,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                row['patient_name']?.toString() ?? 'Patient',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+              const SizedBox(height: 10),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-              const SizedBox(height: 12),
-              _detailRow('Completed', DriverUi.formatWhen(when)),
-              _detailRow('Patient ID', row['patient_id']?.toString() ?? '—'),
-              _detailRow('Pickup', row['location']?.toString() ?? '—'),
-              _detailRow('Priority', row['emergency_type']?.toString() ?? '—'),
-              if ((row['notes'] ?? '').toString().trim().isNotEmpty)
-                _detailRow('Notes', row['notes'].toString()),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  style: FilledButton.styleFrom(backgroundColor: DriverUi.primaryBlue),
-                  child: const Text('Close'),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.paddingOf(ctx).bottom + 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        row['patient_name']?.toString() ?? 'Patient',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _detailRow('Completed', DriverUi.formatWhen(when)),
+                      _detailRow('Patient ID', row['patient_id']?.toString() ?? '—'),
+                      _detailRow('Pickup', row['location']?.toString() ?? '—'),
+                      _detailRow('Priority', row['emergency_type']?.toString() ?? '—'),
+                      if ((row['notes'] ?? '').toString().trim().isNotEmpty)
+                        _detailRow('Notes', row['notes'].toString()),
+                      MissionRecordEvidenceSection(booking: row),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(24, 0, 24, MediaQuery.paddingOf(ctx).bottom + 12),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    style: FilledButton.styleFrom(backgroundColor: DriverUi.primaryBlue),
+                    child: const Text('Close'),
+                  ),
                 ),
               ),
             ],
@@ -241,7 +282,7 @@ class _DriverRecordsTabState extends State<DriverRecordsTab> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Finished jobs appear here after you complete discharge.',
+              'Finished jobs appear here after discharge. Tap a row for photos, patient media, and chat.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: Colors.blueGrey),
             ),

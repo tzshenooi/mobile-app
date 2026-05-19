@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 /// Shared local notifications for driver dispatch, patient mission updates, and chat.
@@ -9,6 +10,7 @@ class LocalNotificationService {
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
+  bool? _canNotify;
 
   static const _channelDispatch = AndroidNotificationChannel(
     'dispatch_alerts',
@@ -44,6 +46,11 @@ class LocalNotificationService {
     if (_initialized) return;
     const initSettings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
     );
     await _plugin.initialize(initSettings);
     final android = _plugin.resolvePlatformSpecificImplementation<
@@ -52,8 +59,57 @@ class LocalNotificationService {
     await android?.createNotificationChannel(_channelMission);
     await android?.createNotificationChannel(_channelChat);
     await android?.createNotificationChannel(_channelScheduled);
-    await android?.requestNotificationsPermission();
     _initialized = true;
+  }
+
+  /// Call after the first frame so Android 13+ shows the system permission dialog.
+  Future<bool> ensureCanNotify({bool requestIfNeeded = true}) async {
+    if (_canNotify == true) return true;
+    await initialize();
+
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android != null) {
+      var enabled = await android.areNotificationsEnabled() ?? false;
+      if (!enabled && requestIfNeeded) {
+        enabled = await android.requestNotificationsPermission() ?? false;
+      }
+      _canNotify = enabled;
+      if (!enabled) {
+        debugPrint('LocalNotificationService: notifications disabled on Android');
+      }
+      return enabled;
+    }
+
+    final ios = _plugin.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>();
+    if (ios != null) {
+      if (requestIfNeeded) {
+        final granted = await ios.requestPermissions(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
+        _canNotify = granted ?? false;
+      } else {
+        _canNotify = true;
+      }
+      return _canNotify ?? false;
+    }
+
+    _canNotify = true;
+    return true;
+  }
+
+  Future<bool> _showIfAllowed(
+    int id,
+    String? title,
+    String? body,
+    NotificationDetails details,
+  ) async {
+    if (!await ensureCanNotify()) return false;
+    await _plugin.show(id, title, body, details);
+    return true;
   }
 
   int _scheduledNotificationId(String bookingId) =>
@@ -63,12 +119,11 @@ class LocalNotificationService {
   Future<void> showScheduledPickupReminder({
     required Map<String, dynamic> booking,
   }) async {
-    await initialize();
     final id = booking['id']?.toString() ?? 'scheduled';
     final patient = (booking['patient_name'] ?? 'Patient').toString();
     final location = (booking['location'] ?? 'Open app to acknowledge').toString();
     final pickup = booking['scheduled_at']?.toString() ?? '';
-    await _plugin.show(
+    await _showIfAllowed(
       _scheduledNotificationId(id),
       'Scheduled pickup — acknowledge',
       '$patient · $location${pickup.isNotEmpty ? '\nPickup: $pickup' : ''}',
@@ -85,6 +140,11 @@ class LocalNotificationService {
           category: AndroidNotificationCategory.alarm,
           ticker: 'scheduled_pickup',
         ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
       ),
     );
   }
@@ -97,10 +157,9 @@ class LocalNotificationService {
   Future<void> showDriverDispatch({
     required Map<String, dynamic> booking,
   }) async {
-    await initialize();
     final location =
         (booking['location'] ?? 'Open app to acknowledge dispatch').toString();
-    await _plugin.show(
+    await _showIfAllowed(
       1001,
       'New Mission Assigned',
       location,
@@ -112,6 +171,11 @@ class LocalNotificationService {
           importance: Importance.max,
           priority: Priority.high,
           ticker: 'dispatch',
+        ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
         ),
       ),
     );
@@ -164,9 +228,8 @@ class LocalNotificationService {
     String? driverName,
     int? notificationId,
   }) async {
-    await initialize();
     final id = notificationId ?? status.hashCode.abs() % 100000 + 2000;
-    await _plugin.show(
+    await _showIfAllowed(
       id,
       titleForPatientStatus(status),
       messageForPatientStatus(status, driverName: driverName),
@@ -178,6 +241,11 @@ class LocalNotificationService {
           importance: Importance.high,
           priority: Priority.high,
         ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
       ),
     );
   }
@@ -187,10 +255,9 @@ class LocalNotificationService {
     required String preview,
     required int idSeed,
   }) async {
-    await initialize();
     final body =
         preview.length > 120 ? '${preview.substring(0, 117)}...' : preview;
-    await _plugin.show(
+    await _showIfAllowed(
       idSeed % 100000 + 3000,
       'Message from $senderLabel',
       body,
@@ -201,6 +268,11 @@ class LocalNotificationService {
           channelDescription: _channelChat.description,
           importance: Importance.high,
           priority: Priority.high,
+        ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
         ),
       ),
     );

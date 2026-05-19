@@ -23,8 +23,21 @@ void main() async {
 // Global variable to access the database anywhere
 final supabase = Supabase.instance.client;
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LocalNotificationService.instance.ensureCanNotify();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

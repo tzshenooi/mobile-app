@@ -12,6 +12,7 @@ import 'patient_bed_availability_screen.dart';
 import 'patient_clinic_contact.dart';
 import 'patient_profile_tab.dart';
 import 'advance_booking_screen.dart';
+import 'patient_mission_record_sheet.dart';
 import 'report_incident_screen.dart';
 
 class PatientHomeScreen extends StatefulWidget {
@@ -390,7 +391,10 @@ class _MyPatientReportsTabState extends State<_MyPatientReportsTab> {
                         driver: row.driver,
                       );
                       final reportId = r['id']?.toString() ?? '';
-                      final canTrack = reportId.isNotEmpty;
+                      final canOpen = reportId.isNotEmpty;
+                      final booking = row.booking;
+                      final status = booking?['status']?.toString() ?? '';
+                      final isCompleted = status == 'Completed';
 
                       return Padding(
                         padding: EdgeInsets.only(bottom: i < rows.length - 1 ? 8 : 0),
@@ -398,22 +402,33 @@ class _MyPatientReportsTabState extends State<_MyPatientReportsTab> {
                           child: ListTile(
                             title: Text('${r['incident_category']}'),
                             subtitle: Text(
-                              '${progress.statusLabel}\n${progress.etaLabel}',
+                              isCompleted
+                                  ? 'Completed · Tap for mission record'
+                                  : '${progress.statusLabel}\n${progress.etaLabel}',
                               style: const TextStyle(height: 1.35),
                             ),
                             isThreeLine: true,
-                            trailing: canTrack
+                            trailing: canOpen
                                 ? Icon(Icons.chevron_right, color: PatientUi.accentRed.withValues(alpha: 0.8))
                                 : null,
-                            onTap: canTrack
-                                ? () {
+                            onTap: !canOpen
+                                ? null
+                                : () {
+                                    if (isCompleted && booking != null) {
+                                      showPatientMissionRecordSheet(
+                                        context,
+                                        report: r,
+                                        booking: booking,
+                                        driverName: progress.driverName,
+                                      );
+                                      return;
+                                    }
                                     Navigator.of(context).push<void>(
                                       MaterialPageRoute<void>(
                                         builder: (_) => AmbulanceTrackingScreen(patientReportId: reportId),
                                       ),
                                     );
-                                  }
-                                : null,
+                                  },
                           ),
                         ),
                       );

@@ -51,5 +51,9 @@
 	<string>Record a short voice note for your incident report.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Add photos from your library to your incident report.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 </dict>
 </plist>

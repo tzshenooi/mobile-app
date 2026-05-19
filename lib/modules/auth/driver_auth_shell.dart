@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../driver/driver_home.dart';
+import 'auth_role_service.dart';
 import 'driver_profile_service.dart';
 import 'login_screen.dart';
 
@@ -36,7 +37,7 @@ class _DriverGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Map<String, dynamic>?>(
-      future: DriverProfileService.loadOrCreate(Supabase.instance.client, userId),
+      future: DriverProfileService.loadDriverProfile(Supabase.instance.client, userId),
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -53,11 +54,19 @@ class _DriverGate extends StatelessWidget {
         }
         if (snap.data == null) {
           WidgetsBinding.instance.addPostFrameCallback((_) async {
-            await Supabase.instance.client.auth.signOut();
+            final client = Supabase.instance.client;
+            final user = client.auth.currentUser;
+            final reason = user != null
+                ? await AuthRoleService.driverAccessDeniedReason(client, user)
+                : null;
+            await client.auth.signOut();
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('This login is not a driver account. Choose Patient, or register as a driver.'),
+                SnackBar(
+                  content: Text(
+                    reason ??
+                        'This login is not a driver account. Choose Patient, or register as a driver.',
+                  ),
                 ),
               );
             }

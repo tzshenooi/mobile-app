@@ -66,7 +66,10 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     _checkInitialStatus(); // Added to sync UI on restart
     _loadClinicMeta();
     _startMissionPolling();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _syncScheduledMissions());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LocalNotificationService.instance.ensureCanNotify();
+      _syncScheduledMissions();
+    });
   }
 
   Future<void> _loadClinicMeta() async {
@@ -279,13 +282,12 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       final status = (booking['status'] ?? '').toString().toLowerCase();
       final shouldPrompt = status == 'pending' || status == 'assigned';
 
-      if (shouldPrompt) {
+      if (shouldPrompt && _lastMissionNotificationId != bookingId) {
+        _lastMissionNotificationId = bookingId;
+        LocalNotificationService.instance.showDriverDispatch(booking: booking);
         if (_isInForeground && _lastMissionPromptId != bookingId && mounted) {
           _lastMissionPromptId = bookingId;
           _showJobPopup(booking);
-        } else if (!_isInForeground && _lastMissionNotificationId != bookingId) {
-          _lastMissionNotificationId = bookingId;
-          LocalNotificationService.instance.showDriverDispatch(booking: booking);
         }
       }
     } catch (e) {
@@ -385,6 +387,26 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     await supabase.from('drivers').update({'current_lat': lat, 'current_lng': lng}).eq('id', userId);
   }
 
+  void _handleIncomingMissionPayload(Map<String, dynamic> row) {
+    final status = (row['status'] ?? '').toString().toLowerCase();
+    if (status != 'pending' && status != 'assigned') return;
+
+    final bookingId = row['id']?.toString();
+    if (bookingId == null) return;
+
+    _activeBookingId = bookingId;
+    _activeBookingData = row;
+
+    if (_lastMissionNotificationId == bookingId) return;
+    _lastMissionNotificationId = bookingId;
+    LocalNotificationService.instance.showDriverDispatch(booking: row);
+
+    if (_isInForeground && _lastMissionPromptId != bookingId && mounted) {
+      _lastMissionPromptId = bookingId;
+      _showJobPopup(row);
+    }
+  }
+
   void _listenForNewJobs() {
     final myId = supabase.auth.currentUser?.id;
     supabase.channel('public:bookings').onPostgresChanges(
@@ -398,12 +420,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
           _syncScheduledMissions();
           return;
         }
-        _activeBookingId = payload.newRecord['id']?.toString();
-        _activeBookingData = payload.newRecord;
-        if (!_isInForeground) {
-          LocalNotificationService.instance.showDriverDispatch(booking: payload.newRecord);
-        }
-        _showJobPopup(payload.newRecord);
+        _handleIncomingMissionPayload(payload.newRecord);
       },
     )
         .onPostgresChanges(
@@ -415,7 +432,9 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
         final status = (payload.newRecord['status'] ?? '').toString();
         if (status == DriverScheduledMissionsService.scheduledStatus) {
           _syncScheduledMissions();
+          return;
         }
+        _handleIncomingMissionPayload(payload.newRecord);
       },
     ).subscribe();
   }
@@ -613,7 +632,10 @@ void _showJobPopup(Map<String, dynamic> booking) {
               index: _navTab.index,
               children: [
                 _buildHomeTab(),
-                DriverRecordsTab(driverId: userId),
+                DriverRecordsTab(
+                  driverId: userId,
+                  isVisible: _navTab == _DriverNavTab.records,
+                ),
                 DriverPatientChatTab(
                   driverId: userId,
                   isOnDuty: _isOnline,

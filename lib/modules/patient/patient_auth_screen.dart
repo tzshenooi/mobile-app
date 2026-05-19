@@ -3,6 +3,8 @@ import 'dart:math' show min;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../auth/auth_role_service.dart';
+
 /// Patient sign-in / sign-up — layout matches clinic patient login mock (red shield, white card).
 class PatientAuthScreen extends StatefulWidget {
   const PatientAuthScreen({super.key, required this.onBackToRoles});
@@ -54,19 +56,15 @@ class _PatientAuthScreenState extends State<PatientAuthScreen> {
           const SnackBar(content: Text('Check your inbox if verification is enabled, then sign in.')),
         );
       } else {
-        await Supabase.instance.client.auth.signInWithPassword(email: email, password: pass);
+        final client = Supabase.instance.client;
+        await client.auth.signInWithPassword(email: email, password: pass);
+        final user = client.auth.currentUser;
+        if (user == null) return;
 
-        final drv = await Supabase.instance.client
-            .from('drivers')
-            .select('id')
-            .eq('id', Supabase.instance.client.auth.currentUser!.id)
-            .maybeSingle();
-
-        if (drv != null && mounted) {
-          await Supabase.instance.client.auth.signOut();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('This account is for ambulance drivers. Use the Driver option.')),
-          );
+        final denied = await AuthRoleService.patientAccessDeniedReason(client, user);
+        if (denied != null && mounted) {
+          await client.auth.signOut();
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(denied)));
           return;
         }
       }
