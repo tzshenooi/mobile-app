@@ -8,7 +8,6 @@ import 'ambulance_tracking_screen.dart';
 import 'patient_mission_loader.dart';
 import 'patient_mission_progress.dart';
 import 'patient_ui.dart';
-import 'patient_bed_availability_screen.dart';
 import 'patient_clinic_contact.dart';
 import 'patient_profile_tab.dart';
 import 'advance_booking_screen.dart';
@@ -54,17 +53,27 @@ class _PatientHomeScreenState extends State<PatientHomeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Clinic phone is not set yet. Ask your clinic to add it in Supabase (clinics.phone) '
-            'or build the app with --dart-define=CLINIC_PHONE=…',
+            'Clinic phone is not set yet. Ask your clinic to add their contact number when registering or in portal Settings.',
           ),
         ),
       );
       return;
     }
+
     final digits = contact.phone!.replaceAll(RegExp(r'[^\d+]+'), '');
     final uri = Uri.parse('tel:$digits');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
+    try {
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open phone dialer for ${contact.phone}.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not call clinic: $e')),
+      );
     }
   }
 
@@ -122,7 +131,6 @@ class _PatientHomeTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final clinicSnap = clinic;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(22, 16, 22, 12),
@@ -135,39 +143,6 @@ class _PatientHomeTab extends StatelessWidget {
             ),
             Text('Hello, $greetingName', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
-            if (!clinicLoading && clinicSnap != null && clinicSnap.showsBedAvailability) ...[
-              Material(
-                color: Colors.white,
-                elevation: 1.5,
-                shadowColor: Colors.black26,
-                borderRadius: BorderRadius.circular(16),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () {
-                    Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(builder: (_) => const PatientBedAvailabilityScreen()),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    child: Row(
-                      children: [
-                        Icon(Icons.local_hotel_rounded, color: PatientUi.accentRed, size: 26),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '${clinicSnap.bedsAvailable} beds free',
-                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                          ),
-                        ),
-                        Icon(Icons.chevron_right_rounded, color: Colors.grey.shade400, size: 28),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
             SlideToConfirm(
               label: clinicLoading ? 'Slide to call clinic' : 'Slide to call ${clinic?.name ?? 'clinic'}',
               icon: Icons.local_hospital_rounded,

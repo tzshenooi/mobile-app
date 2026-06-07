@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/nearest_clinic_service.dart';
 import '../../config/clinic_config.dart';
 import 'patient_location_map.dart';
 import 'patient_places_service.dart';
@@ -369,6 +370,12 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             Supabase.instance.client.auth.currentUser?.email?.split('@').first ?? 'Patient';
         final nowIso = DateTime.now().toUtc().toIso8601String();
         final pid = _patientId.text.trim();
+        final assignedClinic = await NearestClinicService.resolveForPatient(
+          client: Supabase.instance.client,
+          latitude: _pin.latitude,
+          longitude: _pin.longitude,
+          fallbackClinicId: ClinicConfig.hasClinicId ? ClinicConfig.clinicId : null,
+        );
         final mission = <String, dynamic>{
           'patient_name': reporterLabel,
           'patient_id': pid.isEmpty ? null : pid,
@@ -384,23 +391,27 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
           'destination_type': _destinationType,
           'medication_service_eligible': _destinationType == 'public_hospital',
         };
-        if (ClinicConfig.hasClinicId) {
-          mission['assigned_clinic_id'] = ClinicConfig.clinicId;
+        if (assignedClinic != null) {
+          mission['assigned_clinic_id'] = assignedClinic.id;
         }
         await Supabase.instance.client.from('bookings').insert(mission);
-      }
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report submitted.')));
-      if (rid != null) {
+        if (!mounted) return;
+        final clinicMsg = assignedClinic != null
+            ? 'Report sent to ${assignedClinic.name}.'
+            : 'Report submitted.';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(clinicMsg)));
         Navigator.of(context).pushReplacement(
           MaterialPageRoute<void>(
             builder: (_) => AmbulanceTrackingScreen(patientReportId: rid),
           ),
         );
-      } else {
-        Navigator.pop(context);
+        return;
       }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report submitted.')));
+      Navigator.pop(context);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

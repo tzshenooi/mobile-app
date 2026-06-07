@@ -181,6 +181,34 @@ class LocalNotificationService {
     );
   }
 
+  /// Clinic assigned hospital destination after patient secured.
+  Future<void> showHospitalDestination({
+    required String hospitalName,
+  }) async {
+    await _showIfAllowed(
+      1002,
+      'Hospital destination assigned',
+      'Navigate to $hospitalName',
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channelDispatch.id,
+          _channelDispatch.name,
+          channelDescription: _channelDispatch.description,
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          ticker: 'hospital_destination',
+        ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      ),
+    );
+  }
+
   String messageForPatientStatus(String status, {String? driverName}) {
     switch (status) {
       case 'Pending':

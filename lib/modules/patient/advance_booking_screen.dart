@@ -5,11 +5,13 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/nearest_clinic_service.dart';
 import '../../config/clinic_config.dart';
+import 'hospital_destination_field.dart';
+import 'patient_clinic_routing.dart';
 import 'patient_location_map.dart';
 import 'patient_places_service.dart';
 import 'patient_ui.dart';
-
 /// Advance / bedridden non-emergency transport request for the linked clinic.
 class AdvanceBookingScreen extends StatefulWidget {
   const AdvanceBookingScreen({super.key});
@@ -21,14 +23,13 @@ class AdvanceBookingScreen extends StatefulWidget {
 class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
   final _patientName = TextEditingController();
   final _patientId = TextEditingController();
-  final _hospitalName = TextEditingController();
   final _notes = TextEditingController();
   final _addressSearch = TextEditingController();
 
   LatLng _pin = LatLng(PatientUi.malaysiaDefaultLat, PatientUi.malaysiaDefaultLng);
   String _addressLine = '';
   String? _destinationType;
-  DateTime? _pickupAt;
+  HospitalDestinationSelection? _hospitalDestination;  DateTime? _pickupAt;
   bool _bedridden = true;
   bool _loadingLoc = false;
   bool _submitting = false;
@@ -52,9 +53,7 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
     _addressSearch.removeListener(_onSearchChanged);
     _patientName.dispose();
     _patientId.dispose();
-    _hospitalName.dispose();
-    _notes.dispose();
-    _addressSearch.dispose();
+    _notes.dispose();    _addressSearch.dispose();
     super.dispose();
   }
 
@@ -172,14 +171,6 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
   }
 
   Future<void> _submit() async {
-    if (!ClinicConfig.hasClinicId) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Clinic is not configured. Build with --dart-define=CLINIC_ID=<uuid>.'),
-        ),
-      );
-      return;
-    }
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) return;
 
@@ -192,6 +183,16 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
     if (_destinationType == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select a destination type.')));
       return;
+    }
+    if (PatientClinicRouting.isHospitalDestinationType(_destinationType)) {
+      if (_hospitalDestination == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Pick a hospital from the clinic list or search on Google Maps.'),
+          ),
+        );
+        return;
+      }
     }
     if (_pickupAt == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Choose a pickup date and time.')));
@@ -210,6 +211,25 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
 
     setState(() => _submitting = true);
     try {
+      final assignedClinic = await NearestClinicService.resolveForPatient(
+        client: Supabase.instance.client,
+        latitude: _pin.latitude,
+        longitude: _pin.longitude,
+        fallbackClinicId: ClinicConfig.hasClinicId ? ClinicConfig.clinicId : null,
+      );
+      if (assignedClinic == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No clinic with a map location found. Ask your clinic to set their address in the portal.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final dest = _hospitalDestination;
       await Supabase.instance.client.from('bookings').insert({
         'patient_name': name,
         'patient_id': pid,
@@ -224,16 +244,18 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
         'is_bedridden': _bedridden,
         'driver_id': null,
         'reporter_user_id': uid,
-        'assigned_clinic_id': ClinicConfig.clinicId,
+        'assigned_clinic_id': assignedClinic.id,
         'requested_at': DateTime.now().toUtc().toIso8601String(),
-        'hospital_name': _hospitalName.text.trim().isEmpty ? null : _hospitalName.text.trim(),
+        'hospital_name': dest?.name,
         'destination_type': _destinationType,
+        'destination_clinic_id': dest?.clinicId,
+        'destination_latitude': dest?.latitude,
+        'destination_longitude': dest?.longitude,
         'medication_service_eligible': _destinationType == 'public_hospital',
       });
-
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Scheduled booking sent to your clinic.')),
+        SnackBar(content: Text('Scheduled booking sent to ${assignedClinic.name}.')),
       );
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -294,17 +316,22 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
               DropdownMenuItem(value: 'house', child: Text('House / home')),
               DropdownMenuItem(value: 'private_hospital', child: Text('Private hospital')),
             ],
-            onChanged: (v) => setState(() => _destinationType = v),
+            onChanged: (v) => setState(() {
+              _destinationType = v;
+              if (!PatientClinicRouting.isHospitalDestinationType(v)) {
+                _hospitalDestination = null;
+              }
+            }),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _hospitalName,
-            decoration: const InputDecoration(
-              labelText: 'Hospital name (optional)',
-              border: OutlineInputBorder(),
+          if (PatientClinicRouting.isHospitalDestinationType(_destinationType)) ...[
+            const SizedBox(height: 16),
+            const Text('Hospital destination', style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            HospitalDestinationField(
+              value: _hospitalDestination,
+              onChanged: (v) => setState(() => _hospitalDestination = v),
             ),
-          ),
-          const SizedBox(height: 16),
+          ],          const SizedBox(height: 16),
           const Text('Pickup location', style: TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           if (PatientPlacesStatus.googleBlockedForMobile)

@@ -7,7 +7,8 @@ abstract final class PatientMissionLoader {
   static const bookingSelect = '''
 id, status, driver_id, patient_report_id, latitude, longitude, location,
 scene_photo, handover_photo, discharge_completed_at,
-destination_clinic_id, ambulance_departed_at, requested_at, created_at,
+destination_clinic_id, destination_latitude, destination_longitude, hospital_name,
+ambulance_departed_at, requested_at, created_at,
 drivers(id, name, current_lat, current_lng, status)
 ''';
 

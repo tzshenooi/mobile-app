@@ -52,9 +52,13 @@ class _PatientAuthScreenState extends State<PatientAuthScreen> {
           data: const {'role': 'patient'},
         );
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Check your inbox if verification is enabled, then sign in.')),
-        );
+        // Supabase may auto-sign in; sign out so user lands on login, not home.
+        await Supabase.instance.client.auth.signOut();
+        if (!mounted) return;
+        setState(() {
+          _registerMode = false;
+          _password.clear();
+        });
       } else {
         final client = Supabase.instance.client;
         await client.auth.signInWithPassword(email: email, password: pass);

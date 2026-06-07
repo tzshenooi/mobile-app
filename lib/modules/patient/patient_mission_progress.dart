@@ -72,14 +72,25 @@ abstract final class PatientMissionProgress {
     if (booking == null) return null;
     final status = booking['status']?.toString() ?? '';
 
-    if (status == 'Picked Up' && clinic != null) {
-      final lat = _num(clinic['latitude']);
-      final lng = _num(clinic['longitude']);
-      if (lat != null && lng != null) {
+    if (status == 'Picked Up') {
+      if (clinic != null) {
+        final lat = _num(clinic['latitude']);
+        final lng = _num(clinic['longitude']);
+        if (lat != null && lng != null) {
+          return MissionDestination(
+            lat: lat,
+            lng: lng,
+            label: clinic['name']?.toString() ?? 'Hospital',
+          );
+        }
+      }
+      final dLat = _num(booking['destination_latitude']);
+      final dLng = _num(booking['destination_longitude']);
+      if (dLat != null && dLng != null) {
         return MissionDestination(
-          lat: lat,
-          lng: lng,
-          label: clinic['name']?.toString() ?? 'Hospital',
+          lat: dLat,
+          lng: dLng,
+          label: booking['hospital_name']?.toString() ?? 'Hospital',
         );
       }
     }

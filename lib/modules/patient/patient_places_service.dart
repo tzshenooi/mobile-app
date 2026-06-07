@@ -129,6 +129,45 @@ abstract final class PatientPlacesService {
     return _nominatimSearch('$q, Malaysia');
   }
 
+  /// Hospital-biased search (Google Places hospital type, then general fallback).
+  static Future<List<PatientPlaceSuggestion>> searchHospitals(String input) async {
+    final q = input.trim();
+    if (q.length < 2) return [];
+
+    PatientPlacesStatus.lastError = null;
+    PatientPlacesStatus.lastStatus = null;
+    PatientPlacesStatus.lastUsedGoogle = false;
+
+    if (hasGoogleMapsApiKey && !PatientPlacesStatus.googleBlockedForMobile) {
+      final hospitalAuto = await _placesNewHospitalAutocomplete(q);
+      if (hospitalAuto.isNotEmpty) {
+        PatientPlacesStatus.lastUsedGoogle = true;
+        return hospitalAuto;
+      }
+
+      if (!PatientPlacesStatus.googleBlockedForMobile) {
+        final hospitalText = await _placesNewHospitalTextSearch(q);
+        if (hospitalText.isNotEmpty) {
+          PatientPlacesStatus.lastUsedGoogle = true;
+          return hospitalText;
+        }
+      }
+
+      if (!PatientPlacesStatus.googleBlockedForMobile) {
+        final textSearch = await _placesNewTextSearch('$q hospital');
+        if (textSearch.isNotEmpty) {
+          PatientPlacesStatus.lastUsedGoogle = true;
+          return textSearch;
+        }
+      }
+    }
+
+    final osm = await _nominatimSearch('$q hospital');
+    if (osm.isNotEmpty) return osm;
+
+    return autocomplete(q);
+  }
+
   /// True when the last search used OpenStreetMap (Google unavailable on this device).
   static bool get usingOpenStreetMapFallback =>
       PatientPlacesStatus.googleBlockedForMobile ||
@@ -231,6 +270,143 @@ abstract final class PatientPlacesService {
     } catch (e, st) {
       PatientPlacesStatus.lastError = e.toString();
       if (kDebugMode) debugPrint('[Places New autocomplete] $e\n$st');
+      return [];
+    }
+  }
+
+  static Future<List<PatientPlaceSuggestion>> _placesNewHospitalAutocomplete(String input) async {
+    final uri = Uri.https('places.googleapis.com', '/v1/places:autocomplete');
+    final body = json.encode({
+      'input': input,
+      'includedPrimaryTypes': ['hospital'],
+      'includedRegionCodes': ['MY'],
+      'languageCode': 'en',
+    });
+
+    try {
+      final res = await http
+          .post(uri, headers: _googleKeyHeaders, body: body)
+          .timeout(_timeout);
+      if (res.statusCode != 200) {
+        _markGoogleBlockedIfNeeded(res);
+        _recordNewApiError(res);
+        return [];
+      }
+
+      final decoded = json.decode(res.body) as Map<String, dynamic>?;
+      final suggestions = decoded?['suggestions'];
+      if (suggestions is! List) return [];
+
+      final out = <PatientPlaceSuggestion>[];
+      for (final raw in suggestions.take(10)) {
+        if (raw is! Map) continue;
+        final s = Map<String, dynamic>.from(raw);
+        final prediction = s['placePrediction'];
+        if (prediction is! Map) continue;
+        final pred = Map<String, dynamic>.from(prediction);
+
+        final placeId = pred['placeId'] as String?;
+        if (placeId == null || placeId.isEmpty) continue;
+
+        String primary = '';
+        String secondary = '';
+        String full = '';
+
+        final structured = pred['structuredFormat'];
+        if (structured is Map) {
+          final sf = Map<String, dynamic>.from(structured);
+          primary = (sf['mainText']?['text'] as String?)?.trim() ?? '';
+          secondary = (sf['secondaryText']?['text'] as String?)?.trim() ?? '';
+        }
+        final text = pred['text'];
+        if (text is Map) {
+          full = (Map<String, dynamic>.from(text)['text'] as String?)?.trim() ?? '';
+        }
+        if (full.isEmpty) {
+          full = [primary, secondary].where((e) => e.isNotEmpty).join(', ');
+        }
+
+        out.add(PatientPlaceSuggestion(
+          description: full,
+          placeId: placeId,
+          primaryLine: primary.isEmpty ? null : primary,
+          secondaryLine: secondary.isEmpty ? null : secondary,
+        ));
+      }
+      return out;
+    } catch (e, st) {
+      PatientPlacesStatus.lastError = e.toString();
+      if (kDebugMode) debugPrint('[Places New hospital autocomplete] $e\n$st');
+      return [];
+    }
+  }
+
+  static Future<List<PatientPlaceSuggestion>> _placesNewHospitalTextSearch(String input) async {
+    final uri = Uri.https('places.googleapis.com', '/v1/places:searchText');
+    final body = json.encode({
+      'textQuery': input,
+      'includedType': 'hospital',
+      'regionCode': 'MY',
+      'languageCode': 'en',
+      'maxResultCount': 10,
+    });
+
+    try {
+      final res = await http
+          .post(
+            uri,
+            headers: {
+              ..._googleKeyHeaders,
+              'X-Goog-FieldMask':
+                  'places.id,places.formattedAddress,places.displayName,places.location',
+            },
+            body: body,
+          )
+          .timeout(_timeout);
+
+      if (res.statusCode != 200) {
+        _markGoogleBlockedIfNeeded(res);
+        _recordNewApiError(res);
+        return [];
+      }
+
+      final decoded = json.decode(res.body) as Map<String, dynamic>?;
+      final places = decoded?['places'];
+      if (places is! List) return [];
+
+      final out = <PatientPlaceSuggestion>[];
+      for (final raw in places.take(10)) {
+        if (raw is! Map) continue;
+        final place = Map<String, dynamic>.from(raw);
+        final id = place['id'] as String?;
+        final loc = place['location'] as Map<String, dynamic>?;
+        final lat = (loc?['latitude'] as num?)?.toDouble();
+        final lng = (loc?['longitude'] as num?)?.toDouble();
+        LatLng? point;
+        if (lat != null && lng != null) point = LatLng(lat, lng);
+
+        String name = '';
+        final dn = place['displayName'];
+        if (dn is Map) name = (dn['text'] as String?)?.trim() ?? '';
+        final formatted = (place['formattedAddress'] as String?)?.trim() ?? '';
+        final desc = name.isNotEmpty
+            ? (formatted.isNotEmpty && !formatted.toLowerCase().startsWith(name.toLowerCase())
+                ? '$name, $formatted'
+                : name)
+            : formatted;
+        if (desc.isEmpty) continue;
+
+        out.add(PatientPlaceSuggestion(
+          description: desc,
+          placeId: id,
+          latLng: point,
+          primaryLine: name.isEmpty ? null : name,
+          secondaryLine: formatted.isEmpty ? null : formatted,
+        ));
+      }
+      return out;
+    } catch (e, st) {
+      if (kDebugMode) debugPrint('[Places New hospital text search] $e\n$st');
       return [];
     }
   }
