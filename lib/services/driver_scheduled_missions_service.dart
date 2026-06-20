@@ -5,8 +5,17 @@ abstract final class DriverScheduledMissionsService {
   DriverScheduledMissionsService._();
 
   static const scheduledStatus = 'Scheduled';
-  static const alertLeadMinutes = 30;
-  static const alertGraceAfterMinutes = 15;
+  static const alertLeadMinutes = 60;
+  /** How long repeating alerts run after the window opens (unless acknowledged sooner). */
+  static const alertDurationMinutes = 5;
+
+  /// Scheduled / bedridden transport — never use emergency dispatch siren.
+  static bool isScheduledTransportBooking(Map<String, dynamic> booking) {
+    final kind = (booking['booking_kind'] ?? '').toString();
+    final status = (booking['status'] ?? '').toString();
+    if (kind == 'scheduled' || status == scheduledStatus) return true;
+    return booking['scheduled_at'] != null;
+  }
 
   static DateTime? parseScheduledAt(Map<String, dynamic> booking) {
     final raw = booking['scheduled_at'];
@@ -23,7 +32,7 @@ abstract final class DriverScheduledMissionsService {
     return ack != null && ack.toString().isNotEmpty;
   }
 
-  /// True during [lead .. pickup+grace] while not yet acknowledged.
+  /// True during [start .. start+duration] while not yet acknowledged.
   static bool isInAlertWindow(Map<String, dynamic> booking) {
     if ((booking['status'] ?? '').toString() != scheduledStatus) return false;
     if (isAcknowledged(booking)) return false;
@@ -31,7 +40,7 @@ abstract final class DriverScheduledMissionsService {
     if (pickup == null) return false;
     final now = DateTime.now();
     final start = pickup.subtract(const Duration(minutes: alertLeadMinutes));
-    final end = pickup.add(const Duration(minutes: alertGraceAfterMinutes));
+    final end = start.add(const Duration(minutes: alertDurationMinutes));
     return !now.isBefore(start) && now.isBefore(end);
   }
 
@@ -76,13 +85,17 @@ abstract final class DriverScheduledMissionsService {
 
   static Future<void> startMissionNow(
     SupabaseClient client,
-    String bookingId,
-  ) async {
+    String bookingId, {
+    String? driverId,
+  }) async {
     await client.from('bookings').update({
       'status': 'Pending',
       'booking_kind': 'emergency',
       'requested_at': DateTime.now().toUtc().toIso8601String(),
       'scheduled_driver_acknowledged_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', bookingId);
+    if (driverId != null && driverId.isNotEmpty) {
+      await client.from('drivers').update({'status': 'Busy'}).eq('id', driverId);
+    }
   }
 }

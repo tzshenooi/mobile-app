@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'emergency_alert_sound_service.dart';
+import 'driver_scheduled_missions_service.dart';
 
 class _AppLifecycleBinder extends WidgetsBindingObserver {
   @override
@@ -106,15 +107,12 @@ class LocalNotificationService {
   );
 
   static final _channelScheduled = AndroidNotificationChannel(
-    'scheduled_pickup_emergency_v2',
+    'scheduled_pickup_v3',
     'Scheduled pickup',
-    description: 'Upcoming bedridden / scheduled transport for drivers',
-    importance: Importance.max,
+    description: 'Planned bedridden / scheduled transport for drivers',
+    importance: Importance.high,
     playSound: true,
     enableVibration: true,
-    sound: _dispatchAlertSound,
-    audioAttributesUsage: AudioAttributesUsage.alarm,
-    vibrationPattern: _emergencyVibrationPattern,
   );
 
   static AndroidNotificationDetails _destinationAndroidDetails() {
@@ -182,6 +180,7 @@ class LocalNotificationService {
         'destination_alerts_loud',
         'dispatch_alerts',
         'scheduled_pickup',
+        'scheduled_pickup_emergency_v2',
       ]) {
         await android.deleteNotificationChannel(id);
       }
@@ -322,10 +321,64 @@ class LocalNotificationService {
     );
   }
 
+  static AndroidNotificationDetails _scheduledAndroidDetails() {
+    return AndroidNotificationDetails(
+      _channelScheduled.id,
+      _channelScheduled.name,
+      channelDescription: _channelScheduled.description,
+      importance: Importance.high,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+      category: AndroidNotificationCategory.reminder,
+      visibility: NotificationVisibility.public,
+      ticker: 'scheduled_pickup',
+    );
+  }
+
   int _scheduledNotificationId(String bookingId) =>
       5000 + bookingId.hashCode.abs() % 20000;
 
-  /// Repeating alert until the driver opens the app and acknowledges.
+  /// Quiet notice when clinic assigns a scheduled transport (no dispatch siren).
+  Future<void> showScheduledAssignment({
+    required Map<String, dynamic> booking,
+    bool muteSound = false,
+  }) async {
+    final id = booking['id']?.toString() ?? 'scheduled';
+    final patient = (booking['patient_name'] ?? 'Patient').toString();
+    final pickupLabel = DriverScheduledMissionsService.formatPickupLabel(booking);
+    final location = (booking['location'] ?? '').toString();
+    final body = location.isNotEmpty
+        ? '$patient · Pickup $pickupLabel\n$location'
+        : '$patient · Pickup $pickupLabel';
+
+    await _showIfAllowed(
+      _scheduledNotificationId(id),
+      'Scheduled transport assigned',
+      body,
+      muteSound
+          ? _detailsWithoutSound(
+              NotificationDetails(
+                android: _scheduledAndroidDetails(),
+                iOS: const DarwinNotificationDetails(
+                  presentAlert: true,
+                  presentBadge: true,
+                  presentSound: false,
+                ),
+              ),
+            )
+          : NotificationDetails(
+              android: _scheduledAndroidDetails(),
+              iOS: const DarwinNotificationDetails(
+                presentAlert: true,
+                presentBadge: true,
+                presentSound: true,
+              ),
+            ),
+    );
+  }
+
+  /// Reminder during the pre-pickup alert window (no dispatch siren).
   Future<void> showScheduledPickupReminder({
     required Map<String, dynamic> booking,
     bool muteSound = false,
@@ -333,37 +386,30 @@ class LocalNotificationService {
     final id = booking['id']?.toString() ?? 'scheduled';
     final patient = (booking['patient_name'] ?? 'Patient').toString();
     final location = (booking['location'] ?? 'Open app to acknowledge').toString();
-    final pickup = booking['scheduled_at']?.toString() ?? '';
-    await _showEmergencyAlert(
+    final pickup = DriverScheduledMissionsService.formatPickupLabel(booking);
+    await _showIfAllowed(
       _scheduledNotificationId(id),
       'Scheduled pickup — acknowledge',
-      '$patient · $location${pickup.isNotEmpty ? '\nPickup: $pickup' : ''}',
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          _channelScheduled.id,
-          _channelScheduled.name,
-          channelDescription: _channelScheduled.description,
-          importance: Importance.max,
-          priority: Priority.max,
-          playSound: true,
-          enableVibration: true,
-          sound: _dispatchAlertSound,
-          audioAttributesUsage: AudioAttributesUsage.alarm,
-          vibrationPattern: _emergencyVibrationPattern,
-          ongoing: true,
-          category: AndroidNotificationCategory.alarm,
-          additionalFlags: Int32List.fromList([_insistentFlag]),
-          visibility: NotificationVisibility.public,
-          ticker: 'scheduled_pickup',
-        ),
-        iOS: const DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-        ),
-      ),
-      dedupeKey: 'scheduled:$id',
-      muteSound: muteSound,
+      '$patient · $location\nPickup: $pickup',
+      muteSound
+          ? _detailsWithoutSound(
+              NotificationDetails(
+                android: _scheduledAndroidDetails(),
+                iOS: const DarwinNotificationDetails(
+                  presentAlert: true,
+                  presentBadge: true,
+                  presentSound: false,
+                ),
+              ),
+            )
+          : NotificationDetails(
+              android: _scheduledAndroidDetails(),
+              iOS: const DarwinNotificationDetails(
+                presentAlert: true,
+                presentBadge: true,
+                presentSound: true,
+              ),
+            ),
     );
   }
 
@@ -388,6 +434,11 @@ class LocalNotificationService {
     required Map<String, dynamic> booking,
     bool muteSound = false,
   }) async {
+    if (DriverScheduledMissionsService.isScheduledTransportBooking(booking)) {
+      await showScheduledAssignment(booking: booking, muteSound: muteSound);
+      return;
+    }
+
     final bookingId = booking['id']?.toString() ?? 'unknown';
     final location =
         (booking['location'] ?? 'Open app to acknowledge dispatch').toString();

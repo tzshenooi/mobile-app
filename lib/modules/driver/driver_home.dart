@@ -54,6 +54,8 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   String? _clinicEmail;
   List<Map<String, dynamic>> _scheduledMissions = [];
   final _scheduledAlertCoordinator = DriverScheduledAlertCoordinator();
+  final Set<String> _knownScheduledBookingIds = {};
+  bool _scheduledBookingsInitialized = false;
   // 🎨 UI Constants - Tactical Command Theme
   final Color primaryBlue = DriverUi.primaryBlue;
   final Color darkBlue = DriverUi.darkBlue;
@@ -178,6 +180,29 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       final rows = await DriverScheduledMissionsService.loadForDriver(supabase, userId);
       if (mounted) setState(() => _scheduledMissions = rows);
 
+      if (!_scheduledBookingsInitialized) {
+        _knownScheduledBookingIds.addAll(
+          rows.map((b) => b['id']?.toString()).whereType<String>(),
+        );
+        _scheduledBookingsInitialized = true;
+      } else {
+        for (final booking in rows) {
+          final id = booking['id']?.toString();
+          if (id == null || _knownScheduledBookingIds.contains(id)) continue;
+          _knownScheduledBookingIds.add(id);
+          await LocalNotificationService.instance.showScheduledAssignment(
+            booking: booking,
+            muteSound: _isInForeground,
+          );
+          if (_isInForeground && mounted) {
+            _showSnackBar('Scheduled transport assigned. See Upcoming schedule.');
+          }
+        }
+      }
+
+      final activeScheduledIds = rows.map((b) => b['id']?.toString()).whereType<String>().toSet();
+      _knownScheduledBookingIds.removeWhere((id) => !activeScheduledIds.contains(id));
+
       await _scheduledAlertCoordinator.process(
         bookings: rows,
         inForeground: _isInForeground,
@@ -197,6 +222,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     if (!mounted) return;
     final id = booking['id']?.toString();
     if (id == null) return;
+    final driverId = supabase.auth.currentUser?.id;
     final patient = booking['patient_name']?.toString() ?? 'Patient';
     final pickup = DriverScheduledMissionsService.formatPickupLabel(booking);
 
@@ -223,7 +249,11 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
           ),
           FilledButton(
             onPressed: () async {
-              await DriverScheduledMissionsService.startMissionNow(supabase, id);
+              await DriverScheduledMissionsService.startMissionNow(
+                supabase,
+                id,
+                driverId: driverId,
+              );
               _scheduledAlertCoordinator.clear(id);
               await LocalNotificationService.instance.cancelScheduledReminder(id);
               if (ctx.mounted) Navigator.pop(ctx);
@@ -423,6 +453,18 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     if (_lastMissionNotificationId == bookingId) return;
 
     final inForeground = _isInForeground && mounted;
+
+    if (DriverScheduledMissionsService.isScheduledTransportBooking(booking)) {
+      _lastMissionNotificationId = bookingId;
+      LocalNotificationService.instance.showScheduledAssignment(
+        booking: booking,
+        muteSound: inForeground,
+      );
+      if (inForeground) {
+        _showSnackBar('Scheduled transport assigned. See Upcoming schedule.');
+      }
+      return;
+    }
 
     _lastMissionNotificationId = bookingId;
     LocalNotificationService.instance.showDriverDispatch(
@@ -1025,6 +1067,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
 
   Widget _buildScheduledMissionCard(Map<String, dynamic> booking) {
     final id = booking['id']?.toString() ?? '';
+    final driverId = supabase.auth.currentUser?.id;
     final ack = DriverScheduledMissionsService.isAcknowledged(booking);
     final alerting = DriverScheduledMissionsService.isInAlertWindow(booking);
 
@@ -1091,7 +1134,11 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
                   onPressed: id.isEmpty
                       ? null
                       : () async {
-                          await DriverScheduledMissionsService.startMissionNow(supabase, id);
+                          await DriverScheduledMissionsService.startMissionNow(
+                supabase,
+                id,
+                driverId: driverId,
+              );
                           _scheduledAlertCoordinator.clear(id);
                           await LocalNotificationService.instance.cancelScheduledReminder(id);
                           await _syncMissionFromServer();
