@@ -112,6 +112,7 @@ class _MissionChatPanelState extends State<MissionChatPanel>
         senderLabel: widget.peerLabel,
         preview: preview,
         idSeed: id.hashCode,
+        driverAlert: widget.isDriver,
       );
       return;
     }

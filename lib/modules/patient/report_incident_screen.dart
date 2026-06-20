@@ -10,8 +10,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../services/nearest_clinic_service.dart';
-import '../../config/clinic_config.dart';
 import 'patient_location_map.dart';
 import 'patient_places_service.dart';
 import 'patient_report_fs_stub.dart'
@@ -370,12 +368,6 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             Supabase.instance.client.auth.currentUser?.email?.split('@').first ?? 'Patient';
         final nowIso = DateTime.now().toUtc().toIso8601String();
         final pid = _patientId.text.trim();
-        final assignedClinic = await NearestClinicService.resolveForPatient(
-          client: Supabase.instance.client,
-          latitude: _pin.latitude,
-          longitude: _pin.longitude,
-          fallbackClinicId: ClinicConfig.hasClinicId ? ClinicConfig.clinicId : null,
-        );
         final mission = <String, dynamic>{
           'patient_name': reporterLabel,
           'patient_id': pid.isEmpty ? null : pid,
@@ -391,16 +383,14 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
           'destination_type': _destinationType,
           'medication_service_eligible': _destinationType == 'public_hospital',
         };
-        if (assignedClinic != null) {
-          mission['assigned_clinic_id'] = assignedClinic.id;
-        }
         await Supabase.instance.client.from('bookings').insert(mission);
 
         if (!mounted) return;
-        final clinicMsg = assignedClinic != null
-            ? 'Report sent to ${assignedClinic.name}.'
-            : 'Report submitted.';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(clinicMsg)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Report submitted. Nearby clinics have been notified.'),
+          ),
+        );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute<void>(
             builder: (_) => AmbulanceTrackingScreen(patientReportId: rid),
@@ -573,7 +563,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
           TextField(
             controller: _patientId,
             decoration: InputDecoration(
-              hintText: 'NRIC or hospital number',
+              hintText: 'NRIC or patient number',
               contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
               border: fieldBorder(_dividerGrey),
               enabledBorder: fieldBorder(_dividerGrey),
@@ -596,9 +586,9 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             ),
             hint: const Text('Select destination'),
             items: const [
-              DropdownMenuItem(value: 'public_hospital', child: Text('Public hospital')),
+              DropdownMenuItem(value: 'public_hospital', child: Text('Public')),
               DropdownMenuItem(value: 'house', child: Text('House / home')),
-              DropdownMenuItem(value: 'private_hospital', child: Text('Private hospital')),
+              DropdownMenuItem(value: 'private_hospital', child: Text('Private')),
             ],
             onChanged: (v) => setState(() => _destinationType = v),
           ),
@@ -815,7 +805,11 @@ class _ChangeIncidentLocationSheetState extends State<_ChangeIncidentLocationShe
   Future<void> _runAddressSearch(String q) async {
     final gen = ++_searchGeneration;
     try {
-      final hits = await PatientPlacesService.autocomplete(q, newSession: _placesNewSession);
+      final hits = await PatientPlacesService.autocomplete(
+        q,
+        newSession: _placesNewSession,
+        near: _pin,
+      );
       _placesNewSession = false;
       if (!mounted || gen != _searchGeneration) return;
       setState(() {
@@ -826,16 +820,13 @@ class _ChangeIncidentLocationSheetState extends State<_ChangeIncidentLocationShe
           !PatientPlacesStatus.lastUsedGoogle &&
           PatientPlacesStatus.lastStatus != null &&
           mounted) {
+        final hint = PatientPlacesStatus.googleBlockedForMobile
+            ? 'Google Places is blocked for this device key — using OpenStreetMap. '
+                'In Google Cloud, use a mobile key with Application restrictions = None and enable Places API (New).'
+            : 'Search: ${PatientPlacesStatus.lastStatus ?? "no results"}. '
+                'Enable Places API (New) on your Google Maps key.';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Search: ${PatientPlacesStatus.lastStatus ?? "no results"}. '
-              'In Google Cloud enable Places API (New) + Places API, and add an Android app restriction '
-              '(package com.example.flutter_application_1 + your debug SHA-1) on the API key — '
-              'HTTP referrer keys only work on the web app.',
-            ),
-            duration: const Duration(seconds: 7),
-          ),
+          SnackBar(content: Text(hint), duration: const Duration(seconds: 7)),
         );
       }
     } catch (_) {
@@ -942,7 +933,7 @@ class _ChangeIncidentLocationSheetState extends State<_ChangeIncidentLocationShe
                     },
                     textInputAction: TextInputAction.search,
                     decoration: InputDecoration(
-                      hintText: 'Search place or address (school, hospital, street…)',
+                      hintText: 'Search place or address (school, clinic, street…)',
                       prefixIcon: Icon(Icons.search, color: widget.accent),
                       suffixIcon: _searchQuery.text.isEmpty
                           ? null
@@ -968,6 +959,15 @@ class _ChangeIncidentLocationSheetState extends State<_ChangeIncidentLocationShe
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     child: LinearProgressIndicator(minHeight: 2),
+                  ),
+                if (PatientPlacesStatus.googleBlockedForMobile)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Text(
+                      'Using OpenStreetMap search (Google key unavailable on mobile). '
+                      'Results may differ from Google Maps.',
+                      style: TextStyle(fontSize: 12, color: Colors.orange.shade800, height: 1.3),
+                    ),
                   ),
                 if (_searchHits.isNotEmpty)
                   Padding(

@@ -74,7 +74,7 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
   Future<void> _runSearch(String q) async {
     final gen = ++_searchGen;
     try {
-      final hits = await PatientPlacesService.autocomplete(q);
+      final hits = await PatientPlacesService.autocomplete(q, near: _pin);
       if (!mounted || gen != _searchGen) return;
       setState(() {
         _searchHits = hits;
@@ -188,7 +188,7 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
       if (_hospitalDestination == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Pick a hospital from the clinic list or search on Google Maps.'),
+            content: Text('Pick a clinic from the list or search on Google Maps.'),
           ),
         );
         return;
@@ -312,9 +312,9 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
             value: _destinationType,
             decoration: const InputDecoration(labelText: 'Destination', border: OutlineInputBorder()),
             items: const [
-              DropdownMenuItem(value: 'public_hospital', child: Text('Public hospital')),
+              DropdownMenuItem(value: 'public_hospital', child: Text('Public')),
               DropdownMenuItem(value: 'house', child: Text('House / home')),
-              DropdownMenuItem(value: 'private_hospital', child: Text('Private hospital')),
+              DropdownMenuItem(value: 'private_hospital', child: Text('Private')),
             ],
             onChanged: (v) => setState(() {
               _destinationType = v;
@@ -325,7 +325,7 @@ class _AdvanceBookingScreenState extends State<AdvanceBookingScreen> {
           ),
           if (PatientClinicRouting.isHospitalDestinationType(_destinationType)) ...[
             const SizedBox(height: 16),
-            const Text('Hospital destination', style: TextStyle(fontWeight: FontWeight.w700)),
+            const Text('Destination', style: TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             HospitalDestinationField(
               value: _hospitalDestination,

@@ -8,7 +8,6 @@ class RoutableClinic {
     required this.latitude,
     required this.longitude,
     this.address,
-    this.specialty,
   });
 
   final String id;
@@ -16,7 +15,6 @@ class RoutableClinic {
   final double latitude;
   final double longitude;
   final String? address;
-  final String? specialty;
 
   LatLng get latLng => LatLng(latitude, longitude);
 }
@@ -69,7 +67,6 @@ abstract final class PatientClinicRouting {
       latitude: lat,
       longitude: lng,
       address: row['address']?.toString().trim(),
-      specialty: row['specialty']?.toString().trim(),
     );
   }
 

@@ -79,10 +79,22 @@ abstract final class PatientPlacesService {
     }
   }
 
+  static bool _isMobileRestrictionMessage(String message) {
+    final m = message.toLowerCase();
+    if (m.contains('referer') && m.contains('blocked')) return true;
+    if (m.contains('referrer') && m.contains('blocked')) return true;
+    if (m.contains('android client application') && m.contains('blocked')) return true;
+    if (m.contains('api_key_http_referrer_blocked')) return true;
+    if (m.contains('ip address restriction')) return true;
+    return false;
+  }
+
   /// [newSession] reserved for future session-token billing; ignored for HTTP.
+  /// [near] biases Google results toward the map pin / GPS (e.g. USM Gelugor near Penang).
   static Future<List<PatientPlaceSuggestion>> autocomplete(
     String input, {
     bool newSession = false,
+    LatLng? near,
   }) async {
     final q = input.trim();
     if (q.length < 2) return [];
@@ -92,14 +104,14 @@ abstract final class PatientPlacesService {
     PatientPlacesStatus.lastUsedGoogle = false;
 
     if (hasGoogleMapsApiKey && !PatientPlacesStatus.googleBlockedForMobile) {
-      final newApi = await _placesNewAutocomplete(q);
+      final newApi = await _placesNewAutocomplete(q, near: near);
       if (newApi.isNotEmpty) {
         PatientPlacesStatus.lastUsedGoogle = true;
         return newApi;
       }
 
       if (!PatientPlacesStatus.googleBlockedForMobile) {
-        final legacy = await _httpAutocomplete(q);
+        final legacy = await _httpAutocomplete(q, near: near);
         if (legacy.isNotEmpty) {
           PatientPlacesStatus.lastUsedGoogle = true;
           return legacy;
@@ -107,7 +119,7 @@ abstract final class PatientPlacesService {
       }
 
       if (!PatientPlacesStatus.googleBlockedForMobile) {
-        final textSearch = await _placesNewTextSearch(q);
+        final textSearch = await _placesNewTextSearch(q, near: near);
         if (textSearch.isNotEmpty) {
           PatientPlacesStatus.lastUsedGoogle = true;
           return textSearch;
@@ -204,14 +216,25 @@ abstract final class PatientPlacesService {
     return _nominatimReverse(point);
   }
 
-  static Future<List<PatientPlaceSuggestion>> _placesNewAutocomplete(String input) async {
+  static Future<List<PatientPlaceSuggestion>> _placesNewAutocomplete(
+    String input, {
+    LatLng? near,
+  }) async {
     final uri = Uri.https('places.googleapis.com', '/v1/places:autocomplete');
-    // No type filter — include schools, hospitals, malls (like maps.google.com).
-    final body = json.encode({
+    final payload = <String, dynamic>{
       'input': input,
       'includedRegionCodes': ['MY'],
       'languageCode': 'en',
-    });
+    };
+    if (near != null) {
+      payload['locationBias'] = {
+        'circle': {
+          'center': {'latitude': near.latitude, 'longitude': near.longitude},
+          'radius': 50000.0,
+        },
+      };
+    }
+    final body = json.encode(payload);
 
     try {
       final res = await http
@@ -488,14 +511,26 @@ abstract final class PatientPlacesService {
   }
 
   /// Find places by name/keyword (e.g. "School of Management USM") when autocomplete is empty.
-  static Future<List<PatientPlaceSuggestion>> _placesNewTextSearch(String input) async {
+  static Future<List<PatientPlaceSuggestion>> _placesNewTextSearch(
+    String input, {
+    LatLng? near,
+  }) async {
     final uri = Uri.https('places.googleapis.com', '/v1/places:searchText');
-    final body = json.encode({
+    final payload = <String, dynamic>{
       'textQuery': input,
       'regionCode': 'MY',
       'languageCode': 'en',
       'maxResultCount': 10,
-    });
+    };
+    if (near != null) {
+      payload['locationBias'] = {
+        'circle': {
+          'center': {'latitude': near.latitude, 'longitude': near.longitude},
+          'radius': 50000.0,
+        },
+      };
+    }
+    final body = json.encode(payload);
 
     try {
       final res = await http
@@ -560,13 +595,21 @@ abstract final class PatientPlacesService {
     }
   }
 
-  static Future<List<PatientPlaceSuggestion>> _httpAutocomplete(String input) async {
-    final uri = Uri.https('maps.googleapis.com', '/maps/api/place/autocomplete/json', {
+  static Future<List<PatientPlaceSuggestion>> _httpAutocomplete(
+    String input, {
+    LatLng? near,
+  }) async {
+    final params = <String, String>{
       'input': input,
       'key': googleMapsApiKey,
       'components': 'country:my',
       'language': 'en',
-    });
+    };
+    if (near != null) {
+      params['location'] = '${near.latitude},${near.longitude}';
+      params['radius'] = '50000';
+    }
+    final uri = Uri.https('maps.googleapis.com', '/maps/api/place/autocomplete/json', params);
 
     final res = await http.get(uri, headers: _jsonHeaders).timeout(_timeout);
     if (res.statusCode != 200) {
@@ -578,7 +621,10 @@ abstract final class PatientPlacesService {
     final status = body?['status'] as String?;
     if (status != 'OK' && status != 'ZERO_RESULTS') {
       _recordLegacyGoogleStatus(body);
-      if (status == 'REQUEST_DENIED') PatientPlacesStatus.googleBlockedForMobile = true;
+      final errMsg = body?['error_message']?.toString() ?? '';
+      if (status == 'REQUEST_DENIED' && _isMobileRestrictionMessage(errMsg)) {
+        PatientPlacesStatus.googleBlockedForMobile = true;
+      }
       return [];
     }
 
@@ -629,7 +675,10 @@ abstract final class PatientPlacesService {
     final body = json.decode(res.body) as Map<String, dynamic>?;
     if (body?['status'] != 'OK') {
       _recordLegacyGoogleStatus(body);
-      if (body?['status'] == 'REQUEST_DENIED') PatientPlacesStatus.googleBlockedForMobile = true;
+      final errMsg = body?['error_message']?.toString() ?? '';
+      if (body?['status'] == 'REQUEST_DENIED' && _isMobileRestrictionMessage(errMsg)) {
+        PatientPlacesStatus.googleBlockedForMobile = true;
+      }
       return [];
     }
 

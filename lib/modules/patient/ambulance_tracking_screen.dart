@@ -351,8 +351,8 @@ class _AmbulanceTrackingScreenState extends State<AmbulanceTrackingScreen>
                         const SizedBox(height: 12),
                         _SetupHintBanner(
                           message:
-                              'Your report is with the clinic. Progress moves to “Ambulance assigned” '
-                              'when they dispatch a driver from the clinic portal.',
+                              'Your report has been sent to nearby clinics. The first clinic to respond '
+                              'will dispatch an ambulance — this screen updates automatically.',
                         ),
                       ],
                       const SizedBox(height: 16),

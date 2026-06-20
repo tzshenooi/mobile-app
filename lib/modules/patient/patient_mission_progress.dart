@@ -80,7 +80,7 @@ abstract final class PatientMissionProgress {
           return MissionDestination(
             lat: lat,
             lng: lng,
-            label: clinic['name']?.toString() ?? 'Hospital',
+            label: clinic['name']?.toString() ?? 'Clinic',
           );
         }
       }
@@ -90,7 +90,7 @@ abstract final class PatientMissionProgress {
         return MissionDestination(
           lat: dLat,
           lng: dLng,
-          label: booking['hospital_name']?.toString() ?? 'Hospital',
+          label: booking['hospital_name']?.toString() ?? 'Clinic',
         );
       }
     }
@@ -115,7 +115,7 @@ abstract final class PatientMissionProgress {
     if (booking == null) {
       return const PatientMissionProgressView(
         statusLabel: 'Report sent',
-        etaLabel: 'Waiting for clinic dispatch',
+        etaLabel: 'Nearby clinics notified — waiting for dispatch',
         etaMinutes: null,
         hasDriverGps: false,
         isActive: true,
@@ -148,8 +148,8 @@ abstract final class PatientMissionProgress {
     int stepIndex;
 
     if (driverId == null) {
-      statusLabel = 'With clinic dispatch';
-      etaLabel = 'Waiting for ambulance assignment';
+      statusLabel = 'Awaiting dispatch';
+      etaLabel = 'Nearby clinics notified — first to respond sends ambulance';
       stepIndex = 0;
     } else {
       switch (status) {
@@ -174,11 +174,11 @@ abstract final class PatientMissionProgress {
         case 'Picked Up':
           statusLabel = 'Patient picked up';
           if (etaMinutes != null) {
-            etaLabel = 'ETA to hospital ${AmbulanceEta.formatEtaLabel(etaMinutes)}';
+            etaLabel = 'ETA to destination ${AmbulanceEta.formatEtaLabel(etaMinutes)}';
           } else if (!hasGps) {
-            etaLabel = 'En route to hospital · GPS unavailable';
+            etaLabel = 'En route to destination · GPS unavailable';
           } else {
-            etaLabel = 'En route to hospital';
+            etaLabel = 'En route to destination';
           }
           stepIndex = 3;
           break;

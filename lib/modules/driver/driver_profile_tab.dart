@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app_nav.dart';
+import 'driver_change_password_screen.dart';
+import 'driver_edit_contact_screen.dart';
 import 'driver_ui.dart';
 
 /// Driver account and status (Profile tab).
@@ -49,6 +51,35 @@ class _DriverProfileTabState extends State<DriverProfileTab> {
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _openChangePassword() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const DriverChangePasswordScreen()),
+    );
+  }
+
+  Future<void> _openEditContact() async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => DriverEditContactScreen(
+          driverId: widget.driverId,
+          initialPhone: _driver?['phone_number']?.toString(),
+          initialIc: _driver?['ic_number']?.toString(),
+        ),
+      ),
+    );
+    if (saved == true) await _load();
+  }
+
+  String _contactValue(String? raw) {
+    final v = raw?.trim();
+    return (v != null && v.isNotEmpty) ? v : 'Not set — tap Edit contact';
+  }
+
+  bool _isUnset(String? raw) {
+    final v = raw?.trim();
+    return v == null || v.isEmpty;
   }
 
   Future<void> _signOut() async {
@@ -106,14 +137,34 @@ class _DriverProfileTabState extends State<DriverProfileTab> {
                     children: [
                       _infoCard('Account', [
                         _row('Email', _driver?['email']?.toString() ?? authEmail ?? '—'),
-                        _row('Phone', _driver?['phone_number']?.toString() ?? '—'),
-                        _row('IC no.', _driver?['ic_number']?.toString() ?? '—'),
+                        _row('Phone', _contactValue(_driver?['phone_number']?.toString()), muted: _isUnset(_driver?['phone_number']?.toString())),
+                        _row('IC no.', _contactValue(_driver?['ic_number']?.toString()), muted: _isUnset(_driver?['ic_number']?.toString())),
                       ]),
                       const SizedBox(height: 14),
                       _infoCard('Clinic', [
                         _row('Base clinic', _clinicName ?? 'Not linked'),
                       ]),
                       const SizedBox(height: 24),
+                      OutlinedButton.icon(
+                        onPressed: _openEditContact,
+                        icon: const Icon(Icons.edit_outlined),
+                        label: const Text('Edit contact details'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 48),
+                          foregroundColor: DriverUi.primaryBlue,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: _openChangePassword,
+                        icon: const Icon(Icons.lock_reset_outlined),
+                        label: const Text('Change password'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 48),
+                          foregroundColor: DriverUi.primaryBlue,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       OutlinedButton.icon(
                         onPressed: _load,
                         icon: const Icon(Icons.refresh),
@@ -171,7 +222,7 @@ class _DriverProfileTabState extends State<DriverProfileTab> {
     );
   }
 
-  Widget _row(String label, String value) {
+  Widget _row(String label, String value, {bool muted = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
@@ -181,7 +232,16 @@ class _DriverProfileTabState extends State<DriverProfileTab> {
             width: 100,
             child: Text(label, style: const TextStyle(fontSize: 13, color: Colors.blueGrey, fontWeight: FontWeight.w600)),
           ),
-          Expanded(child: Text(value, style: const TextStyle(fontSize: 14, color: Color(0xFF1E293B)))),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 14,
+                color: muted ? Colors.blueGrey : const Color(0xFF1E293B),
+                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+              ),
+            ),
+          ),
         ],
       ),
     );

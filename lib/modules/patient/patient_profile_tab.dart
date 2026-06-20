@@ -1,15 +1,63 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'patient_home_address_screen.dart';
+import 'patient_home_address_service.dart';
+import 'patient_settings_screen.dart';
 import 'patient_ui.dart';
 
 /// App version shown on profile (keep in sync with pubspec.yaml).
 const String kPatientAppVersionLabel = '1.0.0+1 version';
 
-class PatientProfileTab extends StatelessWidget {
+class PatientProfileTab extends StatefulWidget {
   const PatientProfileTab({super.key, required this.onSignOut});
 
   final VoidCallback onSignOut;
+
+  @override
+  State<PatientProfileTab> createState() => _PatientProfileTabState();
+}
+
+class _PatientProfileTabState extends State<PatientProfileTab> {
+  String? _homeSummary;
+  bool _homeLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHome();
+  }
+
+  Future<void> _loadHome() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) {
+      if (mounted) setState(() => _homeLoading = false);
+      return;
+    }
+    try {
+      final home = await PatientHomeAddressService.load(Supabase.instance.client, uid);
+      if (!mounted) return;
+      setState(() {
+        _homeSummary = home?.address;
+        _homeLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _homeLoading = false);
+    }
+  }
+
+  Future<void> _openHomeAddress() async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const PatientHomeAddressScreen()),
+    );
+    if (saved == true) await _loadHome();
+  }
+
+  Future<void> _openSettings() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const PatientSettingsScreen()),
+    );
+  }
 
   static String _displayName(User? user) {
     final meta = user?.userMetadata?['name']?.toString().trim();
@@ -17,12 +65,6 @@ class PatientProfileTab extends StatelessWidget {
     final email = user?.email ?? '';
     final local = email.split('@').first;
     return local.replaceAll(RegExp(r'[._]+'), ' ').trim().toUpperCase();
-  }
-
-  void _comingSoon(BuildContext context, String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$feature — coming soon.')),
-    );
   }
 
   void _showAccountSheet(BuildContext context, User? user) {
@@ -135,34 +177,26 @@ class PatientProfileTab extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             _ProfileMenuTile(
+              icon: Icons.home_outlined,
+              title: 'Home address',
+              subtitle: _homeLoading
+                  ? 'Loading…'
+                  : (_homeSummary?.isNotEmpty == true
+                      ? _homeSummary!
+                      : 'Add your home for clinic send-home routing'),
+              onTap: _openHomeAddress,
+            ),
+            _ProfileMenuTile(
               icon: Icons.person_outline,
               title: 'My Profile',
               subtitle: 'Manage your account information',
               onTap: () => _showAccountSheet(context, user),
             ),
             _ProfileMenuTile(
-              icon: Icons.lock_outline,
-              title: 'Security',
-              subtitle: 'Manage your security settings',
-              onTap: () => _comingSoon(context, 'Security'),
-            ),
-            _ProfileMenuTile(
-              icon: Icons.language,
-              title: 'Language',
-              subtitle: 'Select your language',
-              onTap: () => _comingSoon(context, 'Language'),
-            ),
-            _ProfileMenuTile(
               icon: Icons.settings_outlined,
               title: 'Settings',
-              subtitle: 'Manage accessibility preferences',
-              onTap: () => _comingSoon(context, 'Settings'),
-            ),
-            _ProfileMenuTile(
-              icon: Icons.info_outline,
-              title: 'Help Centre / Feedback',
-              subtitle: 'Reach us if you find an issue',
-              onTap: () => _comingSoon(context, 'Help Centre'),
+              subtitle: 'Account and privacy',
+              onTap: _openSettings,
             ),
             const SizedBox(height: 20),
             Material(
@@ -170,7 +204,7 @@ class PatientProfileTab extends StatelessWidget {
               borderRadius: BorderRadius.circular(14),
               child: InkWell(
                 borderRadius: BorderRadius.circular(14),
-                onTap: onSignOut,
+                onTap: widget.onSignOut,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   child: Row(

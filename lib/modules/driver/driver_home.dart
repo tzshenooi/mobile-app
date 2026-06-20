@@ -8,16 +8,20 @@ import 'package:geolocator_android/geolocator_android.dart';
 import 'package:smart_ambulance_driver/app_nav.dart';
 import 'package:smart_ambulance_driver/services/driver_navigation_destination.dart';
 import 'package:smart_ambulance_driver/services/local_notification_service.dart';
+import 'package:smart_ambulance_driver/services/driver_active_missions_service.dart';
 import 'package:smart_ambulance_driver/services/driver_scheduled_missions_service.dart';
 import 'package:smart_ambulance_driver/services/driver_scheduled_alert_coordinator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 
+import 'driver_patient_details_panel.dart';
 import 'driver_patient_chat_tab.dart';
 import 'driver_profile_tab.dart';
 import 'driver_records_tab.dart';
 import 'driver_ui.dart';
 import '../shared/patient_report_attachments_panel.dart';
+import '../patient/patient_media_preview.dart';
 
 enum _DriverNavTab { home, records, chat, profile }
 
@@ -39,6 +43,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   String? _lastMissionPromptId;
   String? _lastMissionNotificationId;
   String? _lastDestinationFingerprint;
+  String? _resumeNavOfferedForBookingId;
   String? _activeBookingId;
   Map<String, dynamic>? _activeBookingData; // Added to store mission details
   File? _scenePreview;
@@ -70,6 +75,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     _startMissionPolling();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       LocalNotificationService.instance.ensureCanNotify();
+      _syncMissionFromServer();
       _syncScheduledMissions();
     });
   }
@@ -121,38 +127,40 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
   // --- 🛠️ CORE FUNCTIONS (PRESERVED LOGIC) ---
 
   Future<void> _checkInitialStatus() async {
-  try {
-  final userId = supabase.auth.currentUser?.id;
-  if (userId == null) return;
-  
-  // 1. Get Driver Status
-  final driverData = await supabase.from('drivers').select('status').eq('id', userId).single();
-  
-  // 2. 🟢 FIX: Check if there is an existing booking that is NOT completed
-  final activeBooking = await supabase
-      .from('bookings')
-      .select()
-      .eq('driver_id', userId)
-      .filter('status', 'in', '("Pending", "Assigned", "Accepted", "En Route", "Picked Up")')
-      .limit(1)
-      .maybeSingle();
+    try {
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return;
 
-  setState(() {
-    final st = (driverData['status'] ?? '').toString();
-    _isOnline = st == 'Available' || st == 'Busy';
-    if (activeBooking != null) {
-      final previousBookingId = _activeBookingId;
-      _activeBookingId = activeBooking['id'].toString();
-      _activeBookingData = activeBooking;
-      if (previousBookingId != _activeBookingId) {
-        _clearEvidencePreviews();
+      bool isOnline = false;
+      try {
+        final driverData =
+            await supabase.from('drivers').select('status').eq('id', userId).maybeSingle();
+        if (driverData != null) {
+          final st = (driverData['status'] ?? '').toString();
+          isOnline = st == 'Available' || st == 'Busy';
+        }
+      } catch (e) {
+        debugPrint('Driver status load: $e');
       }
+
+      final activeBooking = await DriverActiveMissionsService.loadForDriver(supabase, userId);
+
+      if (!mounted) return;
+      setState(() {
+        _isOnline = isOnline;
+        if (activeBooking != null) {
+          final previousBookingId = _activeBookingId;
+          _activeBookingId = activeBooking['id'].toString();
+          _activeBookingData = activeBooking;
+          if (previousBookingId != _activeBookingId) {
+            _clearEvidencePreviews();
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint('❌ Initial status sync error: $e');
     }
-  });
-  } catch (e) {
-    debugPrint("❌ Initial status sync error: $e");
   }
-}
 
   void _startMissionPolling() {
     _missionPollTimer?.cancel();
@@ -173,7 +181,10 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       await _scheduledAlertCoordinator.process(
         bookings: rows,
         inForeground: _isInForeground,
-        onNotify: (b) => LocalNotificationService.instance.showScheduledPickupReminder(booking: b),
+        onNotify: (b) => LocalNotificationService.instance.showScheduledPickupReminder(
+              booking: b,
+              muteSound: _isInForeground,
+            ),
         onShowDialog: _showScheduledAcknowledgeDialog,
         onCancelNotify: (id) => LocalNotificationService.instance.cancelScheduledReminder(id),
       );
@@ -231,13 +242,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) return;
 
-      final booking = await supabase
-          .from('bookings')
-          .select()
-          .eq('driver_id', userId)
-          .filter('status', 'in', '("Pending", "Assigned", "Accepted", "En Route", "Picked Up")')
-          .limit(1)
-          .maybeSingle();
+      final booking = await DriverActiveMissionsService.loadForDriver(supabase, userId);
 
       if (booking == null) {
         // If no active booking is returned, verify the currently tracked booking
@@ -249,8 +254,8 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
               .eq('id', _activeBookingId!)
               .maybeSingle();
           if (current == null) return;
-          final st = (current['status'] ?? '').toString().toLowerCase();
-          if (st == 'completed' || st == 'cancelled') {
+          final st = (current['status'] ?? '').toString();
+          if (!DriverActiveMissionsService.isActiveStatus(st)) {
             if (mounted) {
               setState(() {
                 _activeBookingId = null;
@@ -305,12 +310,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       final shouldPrompt = status == 'pending' || status == 'assigned';
 
       if (shouldPrompt && _lastMissionNotificationId != bookingId) {
-        _lastMissionNotificationId = bookingId;
-        LocalNotificationService.instance.showDriverDispatch(booking: booking);
-        if (_isInForeground && _lastMissionPromptId != bookingId && mounted) {
-          _lastMissionPromptId = bookingId;
-          _showJobPopup(booking);
-        }
+        _notifyNewMission(booking);
       }
     } catch (e) {
       debugPrint("❌ Mission sync error: $e");
@@ -327,13 +327,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
         _showSnackBar("Cannot go offline during an active mission.");
         return;
       }
-      final activeMission = await supabase
-          .from('bookings')
-          .select('id')
-          .eq('driver_id', userId)
-          .filter('status', 'in', '("Pending", "Assigned", "Accepted", "En Route", "Picked Up")')
-          .limit(1)
-          .maybeSingle();
+      final activeMission = await DriverActiveMissionsService.loadForDriver(supabase, userId);
       if (activeMission != null) {
         _showSnackBar("Cannot go offline during an active mission.");
         return;
@@ -420,12 +414,27 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     _activeBookingData = row;
 
     if (_lastMissionNotificationId == bookingId) return;
-    _lastMissionNotificationId = bookingId;
-    LocalNotificationService.instance.showDriverDispatch(booking: row);
+    _notifyNewMission(row);
+  }
 
-    if (_isInForeground && _lastMissionPromptId != bookingId && mounted) {
+  void _notifyNewMission(Map<String, dynamic> booking) {
+    final bookingId = booking['id']?.toString();
+    if (bookingId == null) return;
+    if (_lastMissionNotificationId == bookingId) return;
+
+    final inForeground = _isInForeground && mounted;
+
+    _lastMissionNotificationId = bookingId;
+    LocalNotificationService.instance.showDriverDispatch(
+      booking: booking,
+      muteSound: inForeground,
+    );
+
+    if (inForeground) {
       _lastMissionPromptId = bookingId;
-      _showJobPopup(row);
+      _showSnackBar(
+        'New mission assigned. Review patient details, then tap the center navigate button.',
+      );
     }
   }
 
@@ -568,7 +577,7 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
       if (hospital.isNotEmpty) {
         _showSnackBar('Patient secured. Destination: $hospital (from clinic).');
       } else {
-        _showSnackBar('Patient secured. Clinic will confirm hospital on the portal.');
+        _showSnackBar('Patient secured. Clinic will confirm destination on the portal.');
       }
     } catch (e) {
       debugPrint('❌ Secure patient error: $e');
@@ -576,20 +585,47 @@ class _DriverHomeState extends State<DriverHome> with WidgetsBindingObserver {
     }
   }
 
+  String _destinationAssignmentLabel() {
+    final destType = (_activeBookingData?['destination_type'] ?? '').toString().trim();
+    if (destType == 'house') return 'Patient home';
+    return 'Clinic destination';
+  }
+
   String? _bookingDestinationSummary() {
     final hospital = (_activeBookingData?['hospital_name'] ?? '').toString().trim();
-    final destType = (_activeBookingData?['destination_type'] ?? '').toString().trim();
+    final destType = _formatDestinationType(
+      (_activeBookingData?['destination_type'] ?? '').toString().trim(),
+    );
     if (hospital.isEmpty && destType.isEmpty) return null;
     if (hospital.isNotEmpty && destType.isNotEmpty) {
-      final label = destType.replaceAll('_', ' ');
-      return '$hospital ($label)';
+      return '$hospital ($destType)';
     }
     return hospital.isNotEmpty ? hospital : destType;
   }
 
-  // Change your popup to look like a Command, not a Choice
-Future<void> _acknowledgeAndNavigate(Map<String, dynamic> booking) async {
-  await supabase.from('bookings').update({
+  String _formatDestinationType(String raw) {
+    switch (raw) {
+      case 'public_hospital':
+        return 'Public';
+      case 'private_hospital':
+        return 'Private';
+      case 'house':
+        return 'House / home';
+    }
+    if (raw.isEmpty) return raw;
+    return raw
+        .replaceAll('_', ' ')
+        .split(' ')
+        .where((part) => part.isNotEmpty)
+        .map((part) => part[0].toUpperCase() + part.substring(1).toLowerCase())
+        .join(' ');
+  }
+
+  // Acknowledge mission and open pickup navigation.
+  Future<void> _acknowledgeAndNavigate(Map<String, dynamic> booking) async {
+    await LocalNotificationService.instance.cancelDriverDispatchAlert();
+
+    await supabase.from('bookings').update({
     'status': 'En Route',
     'ambulance_departed_at': DateTime.now().toUtc().toIso8601String(),
   }).eq('id', booking['id']);
@@ -611,25 +647,40 @@ Future<void> _acknowledgeAndNavigate(Map<String, dynamic> booking) async {
   _launchMaps(booking['latitude'], booking['longitude']);
 }
 
-void _showJobPopup(Map<String, dynamic> booking) {
-  showDialog(
-    context: context,
-    barrierDismissible: false, // Driver MUST acknowledge
-    builder: (context) => AlertDialog(
-      title: const Text("🚨 MISSION ASSIGNED"),
-      content: Text("Proceed immediately to:\n${booking['location']}"),
-      actions: [
-        ElevatedButton(
-          child: const Text("ACKNOWLEDGE & NAVIGATE"),
-          onPressed: () async {
-  await _acknowledgeAndNavigate(booking);
-  if (mounted) Navigator.pop(context);
-},
-        ),
-      ],
-    ),
-  );
-}
+  bool _missionNeedsAcknowledge(Map<String, dynamic>? booking) {
+    if (booking == null) return false;
+    final status = (booking['status'] ?? '').toString().toLowerCase();
+    return status.contains('pending') || status.contains('assigned');
+  }
+
+  Future<void> _onCenterNavigatePressed() async {
+    if (_activeBookingData == null) {
+      _showSnackBar('No active mission to navigate.');
+      return;
+    }
+    if (_missionNeedsAcknowledge(_activeBookingData)) {
+      await _acknowledgeAndNavigate(_activeBookingData!);
+      return;
+    }
+    await LocalNotificationService.instance.cancelDriverDispatchAlert();
+    await _navigateActiveMission();
+  }
+
+  Future<void> _navigateActiveMission() async {
+    if (_activeBookingData == null) {
+      _showSnackBar('No active mission to navigate.');
+      return;
+    }
+    final target = await DriverNavigationDestination.resolve(
+      client: supabase,
+      booking: _activeBookingData!,
+    );
+    if (target == null) {
+      _showSnackBar('No navigation destination for this mission.');
+      return;
+    }
+    await _launchMaps(target.lat, target.lng);
+  }
 
   Future<void> _onActiveBookingUpdated(Map<String, dynamic> row) async {
     final id = row['id']?.toString();
@@ -657,19 +708,24 @@ void _showJobPopup(Map<String, dynamic> booking) {
     Map<String, dynamic>? previous,
     Map<String, dynamic> booking,
   ) async {
-    if (previous == null) {
-      if (DriverNavigationDestination.hasHospitalAssignment(booking)) {
-        _lastDestinationFingerprint ??=
-            DriverNavigationDestination.fingerprint(booking);
+    final bookingId = booking['id']?.toString();
+    if (bookingId == null) return;
+
+    final fp = DriverNavigationDestination.fingerprint(booking);
+    final hasDestination = DriverNavigationDestination.hasHospitalAssignment(booking);
+
+    final destinationChanged = previous != null
+        ? DriverNavigationDestination.destinationJustAssigned(previous, booking)
+        : hasDestination && !await _destinationAlreadyNotified(bookingId, fp);
+
+    if (!destinationChanged) {
+      if (previous == null && hasDestination) {
+        _lastDestinationFingerprint ??= fp;
+        unawaited(_maybeOfferResumeNavigation(booking));
       }
       return;
     }
 
-    if (!DriverNavigationDestination.destinationJustAssigned(previous, booking)) {
-      return;
-    }
-
-    final fp = DriverNavigationDestination.fingerprint(booking);
     if (_lastDestinationFingerprint == fp) return;
 
     final target = await DriverNavigationDestination.resolve(
@@ -678,24 +734,81 @@ void _showJobPopup(Map<String, dynamic> booking) {
     );
     if (target == null || !target.isHospital) return;
 
+    await _notifyDestinationAssigned(
+      bookingId: bookingId,
+      destinationFingerprint: fp,
+      target: target,
+    );
     _lastDestinationFingerprint = fp;
+  }
 
+  Future<bool> _destinationAlreadyNotified(String bookingId, String fp) async {
+    if (_lastDestinationFingerprint == fp) return true;
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('dest_alert_$bookingId') == fp;
+  }
+
+  Future<void> _markDestinationNotified(String bookingId, String fp) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('dest_alert_$bookingId', fp);
+  }
+
+  Future<void> _notifyDestinationAssigned({
+    required String bookingId,
+    required String destinationFingerprint,
+    required DriverNavigationTarget target,
+  }) async {
     await LocalNotificationService.instance.showHospitalDestination(
       hospitalName: target.label,
     );
+    await _markDestinationNotified(bookingId, destinationFingerprint);
 
-    if (!mounted) {
-      await _launchMaps(target.lat, target.lng);
-      return;
-    }
+    // Background / phone locked: normal notification only — no maps takeover.
+    if (!_isInForeground || !mounted) return;
 
-    _showSnackBar('Hospital assigned: ${target.label}. Opening navigation…');
-
-    if (_isInForeground) {
-      unawaited(_showDestinationPopup(target));
-    }
-
+    _showSnackBar('Destination assigned: ${target.label}. Opening navigation…');
+    unawaited(_showDestinationPopup(target));
     await _launchMaps(target.lat, target.lng);
+  }
+
+  Future<void> _maybeOfferResumeNavigation(Map<String, dynamic> booking) async {
+    final bookingId = booking['id']?.toString();
+    if (bookingId == null || _resumeNavOfferedForBookingId == bookingId) return;
+    if (!_isInForeground || !mounted) return;
+
+    final target = await DriverNavigationDestination.resolve(
+      client: supabase,
+      booking: booking,
+    );
+    if (target == null || !target.isHospital) return;
+
+    _resumeNavOfferedForBookingId = bookingId;
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Resume navigation?'),
+        content: Text(
+          'Clinic assigned:\n${target.label}\n\n'
+          'Open Google Maps directions to the destination?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('NOT NOW'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await _launchMaps(target.lat, target.lng);
+            },
+            child: const Text('RESUME'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showDestinationPopup(DriverNavigationTarget target) async {
@@ -704,7 +817,7 @@ void _showJobPopup(Map<String, dynamic> booking) {
       context: context,
       barrierDismissible: true,
       builder: (ctx) => AlertDialog(
-        title: const Text('🏥 Hospital destination assigned'),
+        title: const Text('Destination assigned'),
         content: Text(
           'Clinic assigned:\n${target.label}\n\n'
           'Google Maps navigation is opening now.',
@@ -724,22 +837,6 @@ void _showJobPopup(Map<String, dynamic> booking) {
         ],
       ),
     );
-  }
-
-  Future<void> _navigateActiveMission() async {
-    if (_activeBookingData == null) {
-      _showSnackBar('No active mission to navigate.');
-      return;
-    }
-    final target = await DriverNavigationDestination.resolve(
-      client: supabase,
-      booking: _activeBookingData!,
-    );
-    if (target == null) {
-      _showSnackBar('No navigation destination for this mission.');
-      return;
-    }
-    await _launchMaps(target.lat, target.lng);
   }
 
   Future<void> _launchMaps(dynamic lat, dynamic lng) async {
@@ -1063,6 +1160,10 @@ final bool hasHandoverEvidence =
             Expanded(child: Text(_activeBookingData?['location'] ?? "Syncing location...", style: const TextStyle(color: Colors.grey))),
           ],
         ),
+        DriverPatientDetailsPanel(
+          booking: _activeBookingData,
+          accentColor: primaryBlue,
+        ),
         if (_activeBookingData?['patient_report_id'] != null) ...[
           const SizedBox(height: 16),
           PatientReportAttachmentsPanel(
@@ -1075,20 +1176,14 @@ final bool hasHandoverEvidence =
 
         _buildEvidenceStrip(),
 
-        if (status.contains('pending') || status.contains('assigned')) ...[
-          ElevatedButton(
-            onPressed: () async => _acknowledgeAndNavigate(_activeBookingData!),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: primaryBlue,
-              minimumSize: const Size(double.infinity, 52),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            child: const Text(
-              "ACKNOWLEDGE & NAVIGATE",
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        if (_missionNeedsAcknowledge(_activeBookingData)) ...[
+          const Padding(
+            padding: EdgeInsets.only(bottom: 12),
+            child: Text(
+              'Review patient details above. When ready, tap the center navigate button below to acknowledge and open directions.',
+              style: TextStyle(fontSize: 12, color: Colors.blueGrey, height: 1.35),
             ),
           ),
-          const SizedBox(height: 12),
         ],
 
         // --- 🚑 PHASE 1: ARRIVAL & SECURING PATIENT ---
@@ -1141,33 +1236,45 @@ final bool hasHandoverEvidence =
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.local_hospital_outlined, color: primaryBlue, size: 18),
+                Icon(
+                  (_activeBookingData?['destination_type'] ?? '').toString() == 'house'
+                      ? Icons.home_outlined
+                      : Icons.local_hospital_outlined,
+                  color: primaryBlue,
+                  size: 18,
+                ),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text(
-                    'Clinic destination: ${_bookingDestinationSummary()}',
-                    style: const TextStyle(fontSize: 13, color: Color(0xFF475569), fontWeight: FontWeight.w600),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${_destinationAssignmentLabel()}: ${_bookingDestinationSummary()}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF475569),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (DriverNavigationDestination.hasHospitalAssignment(_activeBookingData!))
+                        const Padding(
+                          padding: EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Tap the navigation button below to reopen directions.',
+                            style: TextStyle(fontSize: 11, color: Colors.blueGrey),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _navigateActiveMission,
-              icon: const Icon(Icons.navigation_rounded, color: Colors.white),
-              label: const Text('NAVIGATE TO HOSPITAL'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryBlue,
-                minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
             ),
             const SizedBox(height: 12),
           ] else ...[
             const Padding(
               padding: EdgeInsets.only(bottom: 12),
               child: Text(
-                'Waiting for clinic to confirm hospital destination on the portal.',
+                'Waiting for clinic to confirm destination on the portal.',
                 style: TextStyle(fontSize: 12, color: Colors.blueGrey),
               ),
             ),
@@ -1215,6 +1322,7 @@ final bool hasHandoverEvidence =
               setState(() {
                 _activeBookingId = null;
                 _activeBookingData = null;
+                _resumeNavOfferedForBookingId = null;
                 _clearEvidencePreviews();
               });
                 _showSnackBar("Mission Completed Successfully");
@@ -1294,9 +1402,17 @@ Widget _buildEvidenceThumbnail(String label, {File? file, String? url}) {
     children: [
       Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
       const SizedBox(height: 4),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: image,
+      GestureDetector(
+        onTap: () => openAttachmentImageViewer(
+          context,
+          file: file,
+          url: file == null && u.isNotEmpty ? u : null,
+          title: label,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: image,
+        ),
       ),
     ],
   );
@@ -1342,11 +1458,17 @@ Widget _buildEvidenceThumbnail(String label, {File? file, String? url}) {
               _navIcon(Icons.home_filled, _navTab == _DriverNavTab.home, () => setState(() => _navTab = _DriverNavTab.home)),
               _navIcon(Icons.description_outlined, _navTab == _DriverNavTab.records, () => setState(() => _navTab = _DriverNavTab.records)),
               GestureDetector(
-                onTap: _navigateActiveMission,
+                onTap: _onCenterNavigatePressed,
                 child: Container(
                   height: 55,
                   width: 55,
-                  decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    border: _missionNeedsAcknowledge(_activeBookingData)
+                        ? Border.all(color: Colors.orangeAccent, width: 3)
+                        : null,
+                  ),
                   child: Icon(Icons.navigation_rounded, color: darkBlue, size: 30),
                 ),
               ),

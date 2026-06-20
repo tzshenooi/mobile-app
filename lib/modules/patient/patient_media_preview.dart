@@ -35,6 +35,51 @@ String attachmentKindFromName(String name, {String? mimeType}) {
 String attachmentKindFromXFile(XFile file) =>
     attachmentKindFromName(file.name, mimeType: file.mimeType);
 
+/// Full-screen pinch-zoom viewer for patient / mission photos.
+Future<void> openAttachmentImageViewer(
+  BuildContext context, {
+  String? url,
+  File? file,
+  String title = 'Photo',
+}) {
+  if (url == null && file == null) return Future.value();
+  return Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (ctx) {
+        final ImageProvider image =
+            file != null ? FileImage(file) : NetworkImage(url!);
+        return Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            title: Text(title),
+          ),
+          body: InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 4,
+            child: Center(
+              child: Image(
+                image: image,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Could not load image',
+                    style: TextStyle(color: Colors.white70),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
 /// Preview a local file before the report is submitted.
 class LocalAttachmentPreview extends StatefulWidget {
   const LocalAttachmentPreview({
@@ -287,25 +332,47 @@ class _RemoteAttachmentPreviewState extends State<RemoteAttachmentPreview> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-            child: Text(
-              widget.name,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
-          ),
           if (widget.kind == 'image')
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(11)),
-              child: Image.network(
-                widget.url,
-                height: 200,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('Could not load image'),
-                ),
+            GestureDetector(
+              onTap: () => openAttachmentImageViewer(context, url: widget.url),
+              child: Stack(
+                alignment: Alignment.bottomRight,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(11),
+                    child: Image.network(
+                      widget.url,
+                      height: 200,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text('Could not load image'),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 8,
+                    bottom: 8,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.zoom_out_map, color: Colors.white, size: 16),
+                            SizedBox(width: 4),
+                            Text('View', style: TextStyle(color: Colors.white, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           if (widget.kind == 'video' && _videoLoading)
@@ -315,12 +382,12 @@ class _RemoteAttachmentPreviewState extends State<RemoteAttachmentPreview> {
             ),
           if (widget.kind == 'video' && _videoError != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
+              padding: const EdgeInsets.all(14),
               child: Text(_videoError!, style: TextStyle(color: Colors.grey.shade600)),
             ),
           if (widget.kind == 'video' && _video != null && _video!.value.isInitialized)
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(11)),
+              borderRadius: BorderRadius.circular(11),
               child: AspectRatio(
                 aspectRatio: _video!.value.aspectRatio,
                 child: Stack(
@@ -345,7 +412,7 @@ class _RemoteAttachmentPreviewState extends State<RemoteAttachmentPreview> {
             ),
           if (widget.kind == 'audio')
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
+              padding: const EdgeInsets.all(12),
               child: FilledButton.icon(
                 onPressed: _toggleAudio,
                 style: FilledButton.styleFrom(backgroundColor: _accent),

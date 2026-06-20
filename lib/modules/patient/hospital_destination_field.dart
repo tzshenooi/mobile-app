@@ -67,7 +67,7 @@ class _HospitalDestinationFieldState extends State<HospitalDestinationField> {
     try {
       final rows = await Supabase.instance.client
           .from('clinics')
-          .select('id, name, address, latitude, longitude, specialty')
+          .select('id, name, address, latitude, longitude')
           .order('name');
       if (!mounted) return;
       final clinics = <RoutableClinic>[];
@@ -206,9 +206,7 @@ class _HospitalDestinationFieldState extends State<HospitalDestinationField> {
               (c) => DropdownMenuItem(
                 value: c.id,
                 child: Text(
-                  c.specialty != null && c.specialty!.isNotEmpty
-                      ? '${c.name} · ${c.specialty}'
-                      : c.name,
+                  c.name,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -228,7 +226,7 @@ class _HospitalDestinationFieldState extends State<HospitalDestinationField> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              'Hospital search uses OpenStreetMap when Google is unavailable on mobile.',
+              'Clinic search uses OpenStreetMap when Google is unavailable on mobile.',
               style: TextStyle(fontSize: 12, color: Colors.grey.shade600, height: 1.35),
             ),
           ),
@@ -236,7 +234,7 @@ class _HospitalDestinationFieldState extends State<HospitalDestinationField> {
           controller: _search,
           enabled: widget.enabled,
           decoration: InputDecoration(
-            labelText: 'Search hospital name',
+            labelText: 'Search clinic name',
             hintText: 'e.g. Lam Wah Ee, Gleneagles…',
             border: const OutlineInputBorder(),
             suffixIcon: _searching

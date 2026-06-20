@@ -2,7 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/ambulance_eta.dart';
 
-/// Nearest registered clinic to a GPS point (for auto-dispatch routing).
+/// Nearest registered clinic to a GPS point (scheduled bookings, call-clinic contact).
 class NearestClinicMatch {
   const NearestClinicMatch({
     required this.id,

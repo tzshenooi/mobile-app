@@ -71,7 +71,7 @@ class _DriverPatientChatTabState extends State<DriverPatientChatTab> {
   static const _driverQuickReplies = [
     'Ambulance is on the way',
     'We have arrived',
-    'Patient secured — heading to hospital',
+    'Patient secured — heading to destination',
     'Delayed due to traffic',
   ];
 

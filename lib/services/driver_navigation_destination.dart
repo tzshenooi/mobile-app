@@ -33,13 +33,23 @@ abstract final class DriverNavigationDestination {
     if (!isPickedUp(booking)) return false;
     final name = (booking['hospital_name'] ?? '').toString().trim();
     if (name.isEmpty) return false;
+    final destType = (booking['destination_type'] ?? '').toString().toLowerCase();
+    if (destType == 'house') {
+      return _num(booking['destination_latitude']) != null &&
+          _num(booking['destination_longitude']) != null;
+    }
     return _num(booking['destination_latitude']) != null ||
         booking['destination_clinic_id'] != null;
+  }
+
+  static bool isHomeDestination(Map<String, dynamic> booking) {
+    return (booking['destination_type'] ?? '').toString().toLowerCase() == 'house';
   }
 
   static String fingerprint(Map<String, dynamic> booking) {
     return [
       booking['id'],
+      booking['destination_type'],
       booking['hospital_name'],
       booking['destination_latitude'],
       booking['destination_longitude'],
@@ -63,7 +73,7 @@ abstract final class DriverNavigationDestination {
     if (isPickedUp(booking)) {
       var lat = _num(booking['destination_latitude']);
       var lng = _num(booking['destination_longitude']);
-      var label = (booking['hospital_name'] ?? 'Hospital').toString().trim();
+      var label = (booking['hospital_name'] ?? 'Clinic').toString().trim();
 
       if (lat == null || lng == null) {
         final clinicId = booking['destination_clinic_id']?.toString();
@@ -83,6 +93,10 @@ abstract final class DriverNavigationDestination {
       }
 
       if (lat != null && lng != null && label.isNotEmpty) {
+        final isHome = isHomeDestination(booking);
+        if (isHome && !label.toLowerCase().startsWith('home')) {
+          label = 'Home — $label';
+        }
         return DriverNavigationTarget(lat: lat, lng: lng, label: label, isHospital: true);
       }
     }
